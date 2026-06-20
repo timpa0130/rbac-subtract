@@ -42,6 +42,7 @@ Or directly:
 - Tests go in `tests/`, one file per module, pytest style
 - New features add unit tests for `subtract.py` first, then wire into the controller
 - K8s manifests go in `manifests/`
+- Avoid guard clauses based on unverified assumptions. Always check framework documentation to confirm whether a given scenario actually occurs before coding defenses against it.
 
 ## Limitations
 
