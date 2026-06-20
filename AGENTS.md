@@ -7,7 +7,7 @@ Kubernetes controller that subtracts permissions from an existing ClusterRole. F
 ```
 subtract.py   → Core subtraction logic (pure functions, no K8s deps)
 main.py       → Kopf controller (watches ModifyClusterRole CRD, calls subtract)
-tests/         → Unit tests for subtract.py (26 tests)
+tests/         → Unit tests for subtract.py (27 tests)
 manifests/     → CRD definition + deployment YAML
 examples/      → Sample ModifyClusterRole manifests
 ```
@@ -18,6 +18,16 @@ examples/      → Sample ModifyClusterRole manifests
 2. **Flatten** remove rules the same way
 3. **Subtract** uses wildcard-aware matching (`*` matches any value present in source)
 4. **Regroup** remaining tuples into K8s PolicyRule dicts, grouped by `(apiGroup, resource)`
+
+### Design decisions
+
+- **Wildcard expansion** — Source ClusterRole wildcards (`*`) are expanded in `main.py` before `subtract()` is called, keeping `subtract.py` pure (no K8s API deps):
+  - `resources: ["*"]` expanded via K8s discovery API to all resource names in the rule's apiGroups
+  - `verbs: ["*"]` expanded per resource by querying discovery API for each resource's actual verb list. Errors if a resource is not found (stale role).
+  - `apiGroups: ["*"]` rejected with permanent error (too broad to expand meaningfully)
+  - Rules with `resourceNames` pass through unchanged regardless of wildcards
+- **Owner reference GC** — Target ClusterRoles are owned by their ModifyClusterRole CR via `ownerReferences`. No delete handler needed — K8s garbage collection cleans up the ClusterRole when the CR is deleted.
+- **Label/annotation propagation** — CR labels (with `app.kubernetes.io/managed-by: rbac-subtract` always present) and annotations (excluding `kopf.zalando.org/*` and `kubectl.kubernetes.io/*`) propagate to the target ClusterRole.
 
 ## Commands
 
@@ -46,6 +56,6 @@ Or directly:
 
 ## Limitations
 
-- Source ClusterRole must not contain `*` wildcards (rejected with error)
+- Source ClusterRole must not contain `*` in `apiGroups` (rejected with error)
 - Rules with `resourceNames` pass through unchanged (safe default)
 - `nonResourceURLs` not supported (dropped from output)
