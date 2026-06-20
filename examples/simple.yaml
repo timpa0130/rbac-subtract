@@ -54,3 +54,27 @@ spec:
     - 'deletecollection'
     - 'patch'
     - 'update'
+---
+apiVersion: kim.karolinska.se/v1
+kind: ModifyClusterRole
+metadata:
+  name: my-edit
+spec:
+  clusterRole: edit
+  removeRules:
+  - apiGroups:
+    - 'apps'
+    resources:
+    - 'daemonsets'
+    verbs:
+    - 'create'
+  - apiGroups:
+    - networking.k8s.io
+    resources:
+    - ingresses
+    verbs:
+    - create
+    - delete
+    - deletecollection
+    - patch
+    - update
