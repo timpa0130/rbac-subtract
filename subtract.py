@@ -48,9 +48,8 @@ def regroup(permissions: Set[Permission]) -> List[Dict]:
 
 def _has_wildcard(rules: List[Dict]) -> bool:
     for rule in rules:
-        for field in ('apiGroups', 'resources', 'verbs'):
-            if '*' in rule.get(field, []):
-                return True
+        if '*' in rule.get('apiGroups', []):
+            return True
     return False
 
 
@@ -62,7 +61,7 @@ def subtract(
     """Subtract remove_rules from source_rules, returning the resulting rules."""
     if _has_wildcard(source_rules):
         raise ValueError(
-            "source ClusterRole contains '*' wildcard in apiGroups, resources, or verbs — not supported"
+            "source ClusterRole contains '*' in apiGroups — not supported"
         )
 
     log = logger or getLogger(__name__)

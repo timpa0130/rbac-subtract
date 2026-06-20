@@ -352,9 +352,9 @@ def test_remove_wildcard_verb_partial():
     }]
 
 
-# --- source wildcard rejection ---
+# --- source wildcard handling ---
 
-def test_source_wildcard_rejected():
+def test_source_apigroup_wildcard_rejected():
     source = [{
         'apiGroups': ['*'],
         'resources': ['deployments'],
@@ -365,11 +365,25 @@ def test_source_wildcard_rejected():
         'resources': ['deployments'],
         'verbs': ['get'],
     }]
-    with pytest.raises(ValueError, match="wildcard"):
+    with pytest.raises(ValueError, match="apiGroups"):
         subtract(source, remove)
 
 
-def test_source_verb_wildcard_rejected():
+def test_source_resource_wildcard_accepted():
+    source = [{
+        'apiGroups': ['apps'],
+        'resources': ['*'],
+        'verbs': ['get'],
+    }]
+    remove = [{
+        'apiGroups': ['apps'],
+        'resources': ['deployments'],
+        'verbs': ['get'],
+    }]
+    subtract(source, remove)
+
+
+def test_source_verb_wildcard_accepted():
     source = [{
         'apiGroups': ['apps'],
         'resources': ['deployments'],
@@ -380,8 +394,7 @@ def test_source_verb_wildcard_rejected():
         'resources': ['deployments'],
         'verbs': ['get'],
     }]
-    with pytest.raises(ValueError, match="wildcard"):
-        subtract(source, remove)
+    subtract(source, remove)
 
 
 # --- resourceNames preservation ---
