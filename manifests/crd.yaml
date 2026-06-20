@@ -1,0 +1,51 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: modifyclusterroles.kim.karolinska.se
+spec:
+  group: kim.karolinska.se
+  names:
+    kind: ModifyClusterRole
+    plural: modifyclusterroles
+    singular: modifyclusterrole
+  scope: Cluster
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        required: [spec]
+        properties:
+          spec:
+            type: object
+            required: [clusterRole, removeRules]
+            properties:
+              clusterRole:
+                type: string
+                description: Name of the source ClusterRole to copy from
+              removeRules:
+                type: array
+                description: Rules to subtract from the source ClusterRole
+                items:
+                  type: object
+                  required: [apiGroups, resources, verbs]
+                  properties:
+                    apiGroups:
+                      type: array
+                      items:
+                        type: string
+                    resources:
+                      type: array
+                      items:
+                        type: string
+                    verbs:
+                      type: array
+                      items:
+                        type: string
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+    subresources:
+      status: {}

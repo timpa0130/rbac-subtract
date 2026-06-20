@@ -1,0 +1,21 @@
+apiVersion: kim.karolinska.se/v1
+kind: ModifyClusterRole
+metadata:
+  name: kim-edit
+spec:
+  clusterRole: edit
+  removeRules:
+  - apiGroups:
+    - postgresql.cnpg.io
+    resources:
+    - imagecatalogs
+    verbs:
+    - get
+    - list
+    - watch
+  - apiGroups:
+    - networking.k8s.io
+    resources:
+    - ingresses
+    verbs:
+    - watch
