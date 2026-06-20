@@ -26,6 +26,7 @@ def handle_modify_cluster_role(spec, name, logger, **kwargs):
 
     serialized = client.ApiClient().sanitize_for_serialization(source_role)
     source_rules = serialized.get('rules', [])
+    aggregate = serialized.get('aggregationRule')
 
     logger.info(
         f"Subtracting {len(remove_rules)} remove rule(s) from "
@@ -42,6 +43,7 @@ def handle_modify_cluster_role(spec, name, logger, **kwargs):
             labels={'app.kubernetes.io/managed-by': 'modifyclusterrole-controller'},
         ),
         rules=result_rules,
+        aggregation_rule=aggregate,
     )
 
     try:
