@@ -187,11 +187,30 @@ removeRules:
   - "*"
 ```
 
+## Owner references and cleanup
+
+The target ClusterRole is owned by the `ModifyClusterRole` custom resource via an `ownerReference`. When the `ModifyClusterRole` is deleted, Kubernetes garbage collection automatically removes the target ClusterRole. No manual cleanup or delete handler is needed.
+
+## Label and annotation propagation
+
+Labels from the `ModifyClusterRole` custom resource propagate to the target ClusterRole. The label `app.kubernetes.io/managed-by: rbac-subtract` is always present.
+
+Annotations also propagate, excluding system annotations from Kopf (`kopf.zalando.org/*`) and kubectl (`kubectl.kubernetes.io/*`).
+
 ## Limitations
 
-### Source ClusterRole wildcards rejected
+### Source ClusterRole wildcard expansion
 
-The source ClusterRole must not contain `"*"` in `apiGroups`, `resources`, or `verbs`. A source rule with `resources: ["*"]` is forward-looking (grants access to CRDs installed in the future), and snapshotting it to currently-known resources would silently change behavior. The controller rejects such roles with a permanent error.
+The source ClusterRole may contain `"*"` in `resources` and `verbs`. These are expanded to concrete values at reconciliation time using the Kubernetes discovery API:
+
+- `resources: ["*"]` → expanded to all known resource names in the rule's API groups.
+- `verbs: ["*"]` → expanded to the actual verbs each resource supports (e.g., `get`, `list`, `create`, `delete`). If a resource is not found in the discovery API (e.g., a stale role referencing a removed CRD), the controller raises a permanent error.
+
+Expansion snapshots the currently-known resources. CRDs installed after reconciliation are not picked up until the next reconciliation (the controller re-reconciles on changes to the source ClusterRole or the `ModifyClusterRole` CR).
+
+`apiGroups: ["*"]` is rejected with a permanent error — it is too broad to expand meaningfully.
+
+Rules with `resourceNames` pass through unchanged regardless of wildcards.
 
 ### `resourceNames` rules pass through unchanged
 
