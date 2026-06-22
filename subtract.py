@@ -101,24 +101,24 @@ def subtract(
     remaining: Set[Permission] = set()
     removed: list[tuple[Permission, Permission]] = []
 
-    for perm in source:
-        matching_pat = None
-        for pat in remove_flat:
-            if matches(perm, pat):
-                matching_pat = pat
+    for permisson in source:
+        matching_pattern = None
+        for pattern in remove_flat:
+            if matches(permisson, pattern):
+                matching_pattern = pattern
                 break
-        if matching_pat:
-            removed.append((perm, matching_pat))
+        if matching_pattern:
+            removed.append((permisson, matching_pattern))
         else:
-            remaining.add(perm)
+            remaining.add(permisson)
 
     if removed:
         log.debug("Removed %d tuple(s):", len(removed))
-        for src, pat in removed:
+        for src, pattern in removed:
             log.debug(
                 "  (%s, %s, %s) matched by (%s, %s, %s)",
                 src.api_group, src.resource, src.verb,
-                pat.api_group, pat.resource, pat.verb,
+                pattern.api_group, pattern.resource, pattern.verb,
             )
 
     log.debug("Remaining tuples: %d", len(remaining))
