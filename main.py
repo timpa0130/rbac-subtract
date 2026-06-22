@@ -40,18 +40,18 @@ def _expand_wildcards(rules, logger):
 
         if '*' in verbs:
             new_verbs = set()
-            for res_name in resources:
-                res_verbs = None
+            for resource_name in resources:
+                resource_verbs = None
                 for r in dyn.resources:
-                    if r.name == res_name:
-                        res_verbs = r.verbs
+                    if r.name == resource_name:
+                        resource_verbs = r.verbs
                         break
-                if not res_verbs:
+                if not resource_verbs:
                     raise kopf.PermanentError(
-                        f"Resource '{res_name}' not found in discovery API — "
+                        f"Resource '{resource_name}' not found in discovery API — "
                         "cannot expand verbs: ['*']"
                     )
-                new_verbs.update(res_verbs)
+                new_verbs.update(resource_verbs)
             verbs = sorted(new_verbs)
             logger.info("Expanded verbs: ['*'] to %d verbs from discovery API", len(verbs))
 
