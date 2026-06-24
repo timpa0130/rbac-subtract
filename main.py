@@ -8,7 +8,7 @@ from kubernetes.dynamic.discovery import EagerDiscoverer
 from subtract import subtract
 
 _skip_annotation_prefixes = ('kopf.zalando.org/', 'kubectl.kubernetes.io/')
-_reconcile_interval = int(os.environ.get("RECONCILE_INTERVAL", "30"))
+_reconcile_interval = int(os.environ.get("RECONCILE_INTERVAL", "60"))
 
 def _expand_wildcards(rules, logger):
     dyn = DynamicClient(client.ApiClient(), discoverer=EagerDiscoverer)
