@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"slices"
 
 	"github.com/go-logr/logr"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -24,10 +25,9 @@ func ExpandWildcards(ctx context.Context, disco discovery.DiscoveryInterface, ru
 			continue
 		}
 
-		for _, ag := range rule.APIGroups {
-			if ag == "*" {
-				return nil, fmt.Errorf("source ClusterRole contains '*' in apiGroups — not supported")
-			}
+		// Check if the rule contains wildcard in apiGroups if so we return
+		if slices.Contains(rule.APIGroups, "*") {
+    		return nil, fmt.Errorf("source ClusterRole contains '*' in apiGroups — not supported")
 		}
 
 		resources := rule.Resources
