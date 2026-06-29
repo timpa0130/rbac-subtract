@@ -29,7 +29,7 @@ func defaultReconcileInterval() time.Duration {
 			return time.Duration(d) * time.Second
 		}
 	}
-	return 60 * time.Second
+	return 4 * time.Hour
 }
 
 // ModifyClusterRoleReconciler reconciles a ModifyClusterRole object

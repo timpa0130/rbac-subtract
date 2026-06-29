@@ -232,7 +232,7 @@ The source ClusterRole may contain `"*"` in `resources` and `verbs`. These are e
 - `resources: ["*"]` → expanded to all known resource names in the rule's API groups.
 - `verbs: ["*"]` → expanded to the actual verbs each resource supports (e.g., `get`, `list`, `create`, `delete`). If a resource is not found in the discovery API (e.g., a stale role referencing a removed CRD), the controller raises a permanent error.
 
-Expansion snapshots the currently-known resources. CRDs installed after reconciliation are not picked up until the next reconciliation (the controller re-reconciles periodically via `REQUEUE_INTERVAL`, default 60s).
+Expansion snapshots the currently-known resources. CRDs installed after reconciliation are not picked up until the next reconciliation (the controller re-reconciles periodically via `REQUEUE_INTERVAL`, default 4h).
 
 `apiGroups: ["*"]` — rules with a wildcard API group are passed through unchanged. The controller adds the annotation `rbac-subtract.kim.karolinska.se/api-group-wildcard` to the target ClusterRole instead of rejecting.
 
