@@ -1,7 +1,8 @@
 package subtract
 
 import (
-	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -21,10 +22,10 @@ func Matches(source, pattern Permission) bool {
 func Flatten(rules []rbacv1.PolicyRule) map[Permission]struct{} {
 	result := make(map[Permission]struct{})
 	for _, rule := range rules {
-		for _, ag := range rule.APIGroups {
-			for _, r := range rule.Resources {
-				for _, v := range rule.Verbs {
-					result[Permission{APIGroup: ag, Resource: r, Verb: v}] = struct{}{}
+		for _, apiGroup := range rule.APIGroups {
+			for _, resource := range rule.Resources {
+				for _, verb := range rule.Verbs {
+					result[Permission{APIGroup: apiGroup, Resource: resource, Verb: verb}] = struct{}{}
 				}
 			}
 		}
@@ -42,12 +43,12 @@ func Regroup(permissions map[Permission]struct{}) []rbacv1.PolicyRule {
 		resource string
 	}
 	groups := make(map[agResourceKey]map[string]struct{})
-	for p := range permissions {
-		key := agResourceKey{p.APIGroup, p.Resource}
+	for permission := range permissions {
+		key := agResourceKey{permission.APIGroup, permission.Resource}
 		if groups[key] == nil {
 			groups[key] = make(map[string]struct{})
 		}
-		groups[key][p.Verb] = struct{}{}
+		groups[key][permission.Verb] = struct{}{}
 	}
 
 	// Step 2: merge by (apiGroup, sortedVerbTuple) -> set of resources
@@ -57,7 +58,7 @@ func Regroup(permissions map[Permission]struct{}) []rbacv1.PolicyRule {
 	}
 	merged := make(map[agVerbsKey]map[string]struct{})
 	for key, verbSet := range groups {
-		sortedVerbs := sortedKeys(verbSet)
+		sortedVerbs := slices.Sorted(maps.Keys(verbSet))
 		verbKey := strings.Join(sortedVerbs, ",")
 		agv := agVerbsKey{key.apiGroup, verbKey}
 		if merged[agv] == nil {
@@ -81,7 +82,7 @@ func Regroup(permissions map[Permission]struct{}) []rbacv1.PolicyRule {
 		}
 		specs = append(specs, ruleSpec{
 			apiGroup:  key.apiGroup,
-			resources: sortedKeys(resourceSet),
+			resources: slices.Sorted(maps.Keys(resourceSet)),
 			verbs:     verbList,
 		})
 	}
@@ -94,45 +95,29 @@ func Regroup(permissions map[Permission]struct{}) []rbacv1.PolicyRule {
 	})
 
 	result := make([]rbacv1.PolicyRule, 0, len(specs))
-	for _, s := range specs {
+	for _, spec := range specs {
 		result = append(result, rbacv1.PolicyRule{
-			APIGroups: []string{s.apiGroup},
-			Resources: s.resources,
-			Verbs:     s.verbs,
+			APIGroups: []string{spec.apiGroup},
+			Resources: spec.resources,
+			Verbs:     spec.verbs,
 		})
 	}
 	return result
 }
 
-// hasWildcardAPI checks if any rule contains '*' in apiGroups.
-func hasWildcardAPI(rules []rbacv1.PolicyRule) bool {
-	for _, rule := range rules {
-		for _, ag := range rule.APIGroups {
-			if ag == "*" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // Subtract removes removeRules from sourceRules, returning the resulting rules.
-// Source rules with ResourceNames pass through unchanged.
-// Returns an error if source contains '*' in apiGroups.
+// Source rules with ResourceNames or '*' in apiGroups pass through unchanged.
 func Subtract(sourceRules, removeRules []rbacv1.PolicyRule, logger logr.Logger) ([]rbacv1.PolicyRule, error) {
-	if hasWildcardAPI(sourceRules) {
-		return nil, fmt.Errorf("source ClusterRole contains '*' in apiGroups — not supported")
-	}
 
 	log := logger.WithName("subtract")
 
 	var passThrough []rbacv1.PolicyRule
 	var concrete []rbacv1.PolicyRule
-	for _, r := range sourceRules {
-		if len(r.ResourceNames) > 0 {
-			passThrough = append(passThrough, r)
+	for _, rule := range sourceRules {
+		if len(rule.ResourceNames) > 0 || hasWildcard(rule.APIGroups) {
+			passThrough = append(passThrough, rule)
 		} else {
-			concrete = append(concrete, r)
+			concrete = append(concrete, rule)
 		}
 	}
 
@@ -165,7 +150,7 @@ func Subtract(sourceRules, removeRules []rbacv1.PolicyRule, logger logr.Logger) 
 	type removal struct {
 		src, pattern Permission
 	}
-	var removed []removal
+	var removedTuples []removal
 
 	for perm := range source {
 		var matching *Permission
@@ -177,22 +162,22 @@ func Subtract(sourceRules, removeRules []rbacv1.PolicyRule, logger logr.Logger) 
 			}
 		}
 		if matching != nil {
-			removed = append(removed, removal{perm, *matching})
+			removedTuples = append(removedTuples, removal{perm, *matching})
 		} else {
 			remaining[perm] = struct{}{}
 		}
 	}
 
-	if len(removed) > 0 {
-		log.V(1).Info("removed tuples", "count", len(removed))
-		for _, r := range removed {
+	if len(removedTuples) > 0 {
+		log.V(1).Info("removed tuples", "count", len(removedTuples))
+		for _, removal := range removedTuples {
 			log.V(1).Info("removed",
-				"sourceApiGroup", r.src.APIGroup,
-				"sourceResource", r.src.Resource,
-				"sourceVerb", r.src.Verb,
-				"patternApiGroup", r.pattern.APIGroup,
-				"patternResource", r.pattern.Resource,
-				"patternVerb", r.pattern.Verb,
+				"sourceApiGroup", removal.src.APIGroup,
+				"sourceResource", removal.src.Resource,
+				"sourceVerb", removal.src.Verb,
+				"patternApiGroup", removal.pattern.APIGroup,
+				"patternResource", removal.pattern.Resource,
+				"patternVerb", removal.pattern.Verb,
 			)
 		}
 	}
@@ -206,11 +191,6 @@ func Subtract(sourceRules, removeRules []rbacv1.PolicyRule, logger logr.Logger) 
 	return append(result, passThrough...), nil
 }
 
-func sortedKeys(m map[string]struct{}) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+func hasWildcard(apiGroups []string) bool {
+	return slices.Contains(apiGroups, "*")
 }

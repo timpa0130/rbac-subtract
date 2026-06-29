@@ -1,8 +1,7 @@
 package wildcard
 
 import (
-	"context"
-	"fmt"
+	"errors"
 	"sort"
 	"slices"
 
@@ -12,136 +11,182 @@ import (
 	"k8s.io/client-go/discovery"
 )
 
-// ExpandWildcards expands wildcards ('*') in source ClusterRole rules
-// using the discovery API. Rules with ResourceNames pass through unchanged.
-// Errors for '*' in apiGroups or resources not found in discovery.
-func ExpandWildcards(ctx context.Context, disco discovery.DiscoveryInterface, rules []rbacv1.PolicyRule, log logr.Logger) ([]rbacv1.PolicyRule, error) {
-	logger := log.WithName("wildcard")
+func ExpandWildcards(discoveryClient discovery.DiscoveryInterface, rules []rbacv1.PolicyRule, log logr.Logger) ([]rbacv1.PolicyRule, bool, error) {
+	log = log.WithName("wildcard")
 
+	// Discover apiGroups, Resources and Verbs for the rules 
+	// ----------------------------------------------------- 
+	uniqueApiGroups := collectApiGroups(rules)
+	apiGroupVersions, err := fetchApiGroupVersions(discoveryClient, uniqueApiGroups)
+	if err != nil {
+		return nil, false, err
+	}
+
+	scopedCache, err := discoverResources(discoveryClient, apiGroupVersions)
+	if err != nil {
+		return nil, false, err
+	}
+	// ----------------------------------------------------- 
+
+	hadWildcardAPI := false
 	var expanded []rbacv1.PolicyRule
+
+	// Here we need to build a new the expanded single instance of rbacv1.PolicyRule
 	for _, rule := range rules {
+		// We need to check if the rule can be proccesed, if not pass it through as is.
 		if len(rule.ResourceNames) > 0 {
+			log.V(1).Info("passing through rule with resourceNames — subtraction skipped",
+				"apiGroups", rule.APIGroups,
+				"resources", rule.Resources,
+				"resourceNames", rule.ResourceNames,
+				"verbs", rule.Verbs,
+			)
 			expanded = append(expanded, rule)
 			continue
 		}
-
-		// Check if the rule contains wildcard in apiGroups if so we return
-		if slices.Contains(rule.APIGroups, "*") {
-    		return nil, fmt.Errorf("source ClusterRole contains '*' in apiGroups — not supported")
+		if hasWildcard(rule.APIGroups) {
+			// If this happens we want a label on the resource we will create.
+			// Warning that the subtraction may not work correctly.
+			hadWildcardAPI = true
+			log.V(0).Info("passing through rule with '*' in apiGroups — subtraction skipped",
+				"apiGroups", rule.APIGroups,
+				"resources", rule.Resources,
+				"verbs", rule.Verbs,
+			)
+			expanded = append(expanded, rule)
+			continue
 		}
-
+		
 		resources := rule.Resources
 		verbs := rule.Verbs
-		verbCache := make(map[string][]string)
 
+		// The resources is wildcarded, build the rule with the actuall resources
 		if hasWildcard(resources) {
-			var resourceNames []string
-			for _, apiGroup := range rule.APIGroups {
-				names, err := resourcesForGroup(ctx, disco, apiGroup, verbCache)
-				if err != nil {
-					return nil, fmt.Errorf("discovery API error for apiGroup %q: %w", apiGroup, err)
-				}
-				logger.V(1).Info("expanding resources", "apiGroup", apiGroup, "count", len(names))
-				resourceNames = append(resourceNames, names...)
-			}
-			resources = uniqueSorted(resourceNames)
+			resources = expandResourceNames(scopedCache, rule.APIGroups)
+			log.V(1).Info("expanded resources", "count", len(resources))
 		}
 
+		// The verbs in this rule has a wildcard expand it to the available verbs
 		if hasWildcard(verbs) {
-			var newVerbs []string
-			for _, resourceName := range resources {
-				resourceVerbs := verbCache[resourceName]
-				if resourceVerbs == nil {
-					var err error
-					resourceVerbs, err = verbsForResource(ctx, disco, resourceName)
-					if err != nil {
-						return nil, fmt.Errorf("discovery API error for resource %q: %w", resourceName, err)
-					}
-				}
-				if len(resourceVerbs) == 0 {
-					return nil, fmt.Errorf("resource %q not found in discovery API — cannot expand verbs: ['*']", resourceName)
-				}
-				newVerbs = append(newVerbs, resourceVerbs...)
+			verbs, err = expandVerbs(scopedCache, rule.APIGroups, resources)
+			if err != nil {
+				return nil, false, err
 			}
-			verbs = uniqueSorted(newVerbs)
 		}
 
+		// Append the expanded rule to the 	"var expanded []rbacv1.PolicyRule"
 		expanded = append(expanded, rbacv1.PolicyRule{
 			APIGroups: rule.APIGroups,
 			Resources: resources,
 			Verbs:     verbs,
 		})
 	}
-	return expanded, nil
+	return expanded, hadWildcardAPI, nil
 }
 
-func resourcesForGroup(ctx context.Context, disco discovery.DiscoveryInterface, apiGroup string, cache map[string][]string) ([]string, error) {
-	apiGroupList, err := disco.ServerGroups()
-	if err != nil {
-		return nil, err
-	}
 
-	var names []string
-	seen := make(map[string]bool)
-	for _, g := range apiGroupList.Groups {
-		if g.Name != apiGroup {
+func collectApiGroups(rules []rbacv1.PolicyRule) []string {
+	var all []string
+	for _, rule := range rules {
+		// Exclude pass-through rules as we dont want to process those
+		if len(rule.ResourceNames) > 0 || hasWildcard(rule.APIGroups) {
 			continue
 		}
-		for _, v := range g.Versions {
-			gv := schema.GroupVersion{Group: apiGroup, Version: v.Version}
-			resourceList, err := disco.ServerResourcesForGroupVersion(gv.String())
-			if err != nil {
-				return nil, err
-			}
-			for _, r := range resourceList.APIResources {
-				if len(r.Verbs) == 0 {
-					continue
-				}
-				if !seen[r.Name] {
-					names = append(names, r.Name)
-					seen[r.Name] = true
-				}
-				cache[r.Name] = r.Verbs
-			}
-		}
+		all = append(all, rule.APIGroups...)
 	}
-	return names, nil
+	return dedupeSorted(nil, all)
 }
 
-func verbsForResource(ctx context.Context, disco discovery.DiscoveryInterface, resourceName string) ([]string, error) {
-	apiGroupList, err := disco.ServerGroups()
+
+func fetchApiGroupVersions(discoveryClient discovery.DiscoveryInterface, apiGroups []string) (map[string][]string, error) {
+	// fetchApiGroupVersions resolves the apiGroups and its versions returning a list needed for resolving resources
+	// The versions isnt used on the rules so we only want to discover resources that may be only present on a newer or older apiVersion
+	apiGroupList, err := discoveryClient.ServerGroups()
 	if err != nil {
 		return nil, err
 	}
-	for _, g := range apiGroupList.Groups {
-		for _, v := range g.Versions {
-			resourceList, err := disco.ServerResourcesForGroupVersion(v.GroupVersion)
-			if err != nil {
-				return nil, err
-			}
-			for _, r := range resourceList.APIResources {
-				if r.Name == resourceName {
-					return r.Verbs, nil
+
+	result := make(map[string][]string, len(apiGroups))
+	for _, apiGroup := range apiGroups {
+		for _, group := range apiGroupList.Groups {
+			if group.Name == apiGroup {
+				for _, version := range group.Versions {
+					result[apiGroup] = append(result[apiGroup], version.Version)
 				}
 			}
 		}
 	}
-	return nil, nil
+	return result, nil
+}
+
+// discoverResources fetches all resources for the given groupVersion and
+// returns a cache scoped per apiGroup: apiGroup → resourceName → verbs.
+// We dont use the versions after this
+func discoverResources(discoveryClient discovery.DiscoveryInterface, apiGroupVersions map[string][]string) (map[string]map[string][]string, error) {
+	cache := make(map[string]map[string][]string)
+
+	for apiGroup, versions := range apiGroupVersions {
+		cache[apiGroup] = make(map[string][]string)
+		for _, version := range versions {
+			groupVersion := schema.GroupVersion{Group: apiGroup, Version: version}
+			resourceList, err := discoveryClient.ServerResourcesForGroupVersion(groupVersion.String())
+			if err != nil {
+				return nil, err
+			}
+			for _, resource := range resourceList.APIResources {
+				if len(resource.Verbs) == 0 {
+					continue
+				}
+				cache[apiGroup][resource.Name] = dedupeSorted(cache[apiGroup][resource.Name], resource.Verbs)
+			}
+		}
+	}
+	return cache, nil
+}
+
+// expandResourceNames collects and deduplicates resource names across the
+// given apiGroups from the scoped cache.
+func expandResourceNames(cache map[string]map[string][]string, apiGroups []string) []string {
+	var allNames []string
+	for _, apiGroup := range apiGroups {
+		for resourceName := range cache[apiGroup] {
+			allNames = append(allNames, resourceName)
+		}
+	}
+	return dedupeSorted(nil, allNames)
+}
+
+// expandVerbs resolves the verbs for each resource across the rule's apiGroups,
+// returning a deduplicated sorted list. A rule with multiple apiGroups applies
+// the same verbs to a resource across all groups, so we union the results.
+func expandVerbs(cache map[string]map[string][]string, apiGroups, resources []string) ([]string, error) {
+	var allVerbs []string
+	for _, resourceName := range resources {
+		var found bool
+		for _, apiGroup := range apiGroups {
+			if verbs, exists := cache[apiGroup][resourceName]; exists {
+				allVerbs = append(allVerbs, verbs...)
+				found = true
+			}
+		}
+		if !found {
+			return nil, errors.New("resource not found in discovery API — cannot expand verbs")
+		}
+	}
+	return dedupeSorted(nil, allVerbs), nil
 }
 
 func hasWildcard(items []string) bool {
-	for _, item := range items {
-		if item == "*" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(items, "*")
 }
 
-func uniqueSorted(items []string) []string {
+func dedupeSorted(existing, new []string) []string {
+	combined := append(existing, new...)
+	// Creating a map with a bool is a more efficent approach
+	// For 100 items: map does ~100 lookups, slice does ~5,000
 	seen := make(map[string]bool)
 	var result []string
-	for _, item := range items {
+	for _, item := range combined {
 		if !seen[item] {
 			seen[item] = true
 			result = append(result, item)

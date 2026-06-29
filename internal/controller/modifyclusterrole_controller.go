@@ -48,7 +48,7 @@ type ModifyClusterRoleReconciler struct {
 func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	// Check if the ModifyClusterRole dosent exist, if it dosent do nothing
+	// Check if the ModifyClusterRole doesn't exist, if it doesn't do nothing
 	var cr kimv1.ModifyClusterRole
 	if err := r.Get(ctx, req.NamespacedName, &cr); err != nil {
 		if errors.IsNotFound(err) {
@@ -63,15 +63,14 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err := r.Get(ctx, client.ObjectKey{Name: sourceName}, &sourceRole); err != nil {
 		if errors.IsNotFound(err) {
 			log.Error(err, "Source ClusterRole not found")
-			return ctrl.Result{}, err
+			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
-	
 	sourceRules := sourceRole.Rules
 	log.Info("Expanding wildcards from the source ClusterRole")
-	expandedRules, err := wildcard.ExpandWildcards(ctx, r.Discovery, sourceRules, log)
+	expandedRules, hadWildcardAPI, err := wildcard.ExpandWildcards(r.Discovery, sourceRules, log)
 	if err != nil {
 		log.Error(err, "Failed to expand wildcards")
 		return ctrl.Result{}, nil
@@ -109,6 +108,9 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		if !strings.HasPrefix(k, "kubectl.kubernetes.io/") {
 			annotations[k] = v
 		}
+	}
+	if hadWildcardAPI {
+		annotations["rbac-subtract.kim.karolinska.se/api-group-wildcard"] = "source ClusterRole contains '*' in apiGroups — subtraction skipped for those rules"
 	}
 
 	ownerRef := metav1.OwnerReference{

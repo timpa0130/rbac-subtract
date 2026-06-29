@@ -207,11 +207,11 @@ func TestSubtract(t *testing.T) {
 			false,
 		},
 		{
-			"source '*' in apiGroups rejected",
+			"source '*' in apiGroups passes through",
 			[]rbacv1.PolicyRule{{APIGroups: []string{"*"}, Resources: []string{"deployments"}, Verbs: []string{"get"}}},
 			[]rbacv1.PolicyRule{{APIGroups: []string{"apps"}, Resources: []string{"deployments"}, Verbs: []string{"get"}}},
-			nil,
-			true,
+			[]rbacv1.PolicyRule{{APIGroups: []string{"*"}, Resources: []string{"deployments"}, Verbs: []string{"get"}}},
+			false,
 		},
 	}
 	for _, tt := range tests {
