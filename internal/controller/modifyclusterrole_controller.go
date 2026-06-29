@@ -39,7 +39,7 @@ type ModifyClusterRoleReconciler struct {
 	Scheme    *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete;escalate
 // +kubebuilder:rbac:groups=kim.karolinska.se,resources=modifyclusterroles,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=kim.karolinska.se,resources=modifyclusterroles/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
