@@ -88,15 +88,14 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			Verbs:     rr.Verbs,
 		}
 	}
-	
-	log.Info("subtracting rules", "sourceCount", len(expandedRules), "removeCount", len(removeRules),)
+
+	log.Info("subtracting rules", "sourceCount", len(expandedRules), "removeCount", len(removeRules))
 	resultingRules, err := subtract.Subtract(expandedRules, removeRules, log)
 	if err != nil {
 		log.Error(err, "subtraction failed")
 		return ctrl.Result{}, nil
 	}
 	// ---------------
-
 
 	// Labels and annotations
 	// ----------------------
