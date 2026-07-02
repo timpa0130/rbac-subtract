@@ -39,7 +39,7 @@ type ModifyClusterRoleStatus struct {
 	// For Kubernetes API conventions, see:
 	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
 
-	// conditions represent the current state of the ModifyClusterRole resource.
+	// Conditions represent the current state of the ModifyClusterRole resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//
 	// Standard condition types include:
@@ -53,6 +53,7 @@ type ModifyClusterRoleStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// Number of rules in the generated ClusterRole
 	// +optional
 	RulesCount int32 `json:"rulesCount,omitempty"`
 }
