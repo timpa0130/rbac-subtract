@@ -49,7 +49,7 @@ type ModifyClusterRoleReconciler struct {
 
 // Reconcile processes.
 func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// Check if the ModifyClusterRole doesn't exist, if it doesn't do nothing
 	var cr kimv1.ModifyClusterRole
@@ -62,20 +62,20 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Santitize rules
 	// ---------------
-	log.Info("Reading source ClusterRole", "sourceName", cr.Spec.ClusterRole)
+	logger.Info("Reading source ClusterRole", "sourceName", cr.Spec.ClusterRole)
 	var sourceRole rbacv1.ClusterRole
 	if err := r.Get(ctx, client.ObjectKey{Name: cr.Spec.ClusterRole}, &sourceRole); err != nil {
 		if errors.IsNotFound(err) {
-			log.Error(err, "Source ClusterRole not found")
+			logger.Error(err, "Source ClusterRole not found")
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
-	log.Info("Expanding wildcards from the source ClusterRole")
-	expandedRules, hadWildcardAPI, err := wildcard.ExpandWildcards(r.Discovery, sourceRole.Rules, log)
+	logger.Info("Expanding wildcards from the source ClusterRole")
+	expandedRules, hadWildcardAPI, err := wildcard.ExpandWildcards(r.Discovery, sourceRole.Rules, logger)
 	if err != nil {
-		log.Error(err, "Failed to expand wildcards")
+		logger.Error(err, "Failed to expand wildcards")
 		return ctrl.Result{}, nil
 	}
 
@@ -89,10 +89,10 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 
-	log.Info("subtracting rules", "sourceCount", len(expandedRules), "removeCount", len(removeRules))
-	resultingRules, err := subtract.Subtract(expandedRules, removeRules, log)
+	logger.Info("subtracting rules", "sourceCount", len(expandedRules), "removeCount", len(removeRules))
+	resultingRules, err := subtract.Subtract(expandedRules, removeRules, logger)
 	if err != nil {
-		log.Error(err, "subtraction failed")
+		logger.Error(err, "subtraction failed")
 		return ctrl.Result{}, nil
 	}
 	// ---------------
@@ -132,14 +132,14 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return nil
 	})
 	if err != nil {
-		log.Error(err, "Failed to reconcile target ClusterRole")
+		logger.Error(err, "Failed to reconcile target ClusterRole")
 		return ctrl.Result{}, err
 	}
-	log.Info("Reconciled target ClusterRole", "operation", result, "rulesCount", len(resultingRules))
+	logger.Info("Reconciled target ClusterRole", "operation", result, "rulesCount", len(resultingRules))
 
 	cr.Status.RulesCount = int32(len(resultingRules))
 	if err := r.Status().Update(ctx, &cr); err != nil {
-		log.Error(err, "Failed to update status")
+		logger.Error(err, "Failed to update status")
 		return ctrl.Result{}, err
 	}
 

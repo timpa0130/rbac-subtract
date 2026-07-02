@@ -79,7 +79,7 @@ func Regroup(permissions map[Permission]struct{}) []rbacv1.PolicyRule {
 
 	//	 Step 3: convert to sorted PolicyRules
 	//   merged[(apiGroup, "verb1,verb2")] = {resource, ...}  →  []PolicyRule
-	var rules []rbacv1.PolicyRule
+	rules := make([]rbacv1.PolicyRule, 0, len(merged))
 	for key, resourceSet := range merged {
 		verbList := strings.Split(key.verbs, ",")
 		if key.verbs == "" {
