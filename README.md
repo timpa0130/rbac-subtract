@@ -1,135 +1,246 @@
-# rbac-subtract
-// TODO(user): Add simple overview of use/purpose
+# RBAC Subtract
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+A Kubernetes controller that fills a gap when a ClusterRole is almost perfect except for a few rules you'd like to remove. Kubernetes has no native way to subtract permissions from an existing ClusterRole — this does it for you.
 
-## Getting Started
+Built in Go with [Kubebuilder](https://github.com/kubernetes-sigs/kubebuilder) v4 and [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime).
 
-### Prerequisites
-- go version v1.24.6+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+## How to use
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+Create a `ModifyClusterRole` custom resource referencing a source ClusterRole and specifying the rules to remove. The controller creates a new ClusterRole (named after the custom resource) with those permissions subtracted.
 
-```sh
-make docker-build docker-push IMG=<some-registry>/rbac-subtract:tag
+```yaml
+apiVersion: kim.karolinska.se/v1
+kind: ModifyClusterRole
+metadata:
+  name: kim-edit
+spec:
+  clusterRole: edit
+  removeRules:
+  - apiGroups:
+    - networking.k8s.io
+    resources:
+    - ingresses
+    verbs:
+    - list
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+This reads the existing `edit` ClusterRole, removes `list` on `networking.k8s.io/ingresses`, and creates a new ClusterRole named `kim-edit`.
 
-**Install the CRDs into the cluster:**
+## How it works
 
-```sh
-make install
+The source ClusterRole's rules are flattened into a set of `(apiGroup, resource, verb)` tuples. The `removeRules` are flattened the same way. The two sets are subtracted, and the remaining tuples are regrouped into output rules.
+
+### Example: Remove an entire block
+
+**Source ClusterRole `my-role`:**
+```yaml
+rules:
+- apiGroups:
+  - postgresql.cnpg.io
+  resources:
+  - imagecatalogs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - list
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
-
-```sh
-make deploy IMG=<some-registry>/rbac-subtract:tag
+**ModifyClusterRole:**
+```yaml
+apiVersion: kim.karolinska.se/v1
+kind: ModifyClusterRole
+metadata:
+  name: kim-role
+spec:
+  clusterRole: my-role
+  removeRules:
+  - apiGroups:
+    - networking.k8s.io
+    resources:
+    - ingresses
+    verbs:
+    - list
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
+The entire `networking.k8s.io` rule is removed. If the rule contained additional verbs, only `list` would be removed.
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+### Example: Remove a single resource from a multi-resource rule
 
-```sh
-kubectl apply -k config/samples/
+**Source ClusterRole `my-role`:**
+```yaml
+rules:
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  - networkpolicies
+  verbs:
+  - list
 ```
 
->**NOTE**: Ensure that the samples has default values to test it out.
-
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
-
-```sh
-kubectl delete -k config/samples/
+**ModifyClusterRole:**
+```yaml
+apiVersion: kim.karolinska.se/v1
+kind: ModifyClusterRole
+metadata:
+  name: kim-role
+spec:
+  clusterRole: my-role
+  removeRules:
+  - apiGroups:
+    - networking.k8s.io
+    resources:
+    - ingresses
+    verbs:
+    - list
 ```
 
-**Delete the APIs(CRDs) from the cluster:**
+`ingresses` is removed from the rule; `networkpolicies` remains with `list`.
 
-```sh
-make uninstall
+### Example: The tricky split case
+
+**Source ClusterRole `my-role`:**
+```yaml
+rules:
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  - networkpolicies
+  verbs:
+  - list
+  - patch
 ```
 
-**UnDeploy the controller from the cluster:**
-
-```sh
-make undeploy
+**ModifyClusterRole:**
+```yaml
+apiVersion: kim.karolinska.se/v1
+kind: ModifyClusterRole
+metadata:
+  name: kim-role
+spec:
+  clusterRole: my-role
+  removeRules:
+  - apiGroups:
+    - networking.k8s.io
+    resources:
+    - ingresses
+    verbs:
+    - patch
 ```
 
-## Project Distribution
+Removing `patch` on `ingresses` means the original rule can't stay as-is — it must be split. The output becomes:
 
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/rbac-subtract:tag
+```yaml
+rules:
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - list
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - list
+  - patch
 ```
 
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
+One rule becomes two: `ingresses` keeps only `list`, while `networkpolicies` retains both verbs.
 
-2. Using the installer
+## Wildcard support in removeRules
 
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
+`removeRules` supports `"*"` as a wildcard in `resources` and `verbs`. `"*"` matches any value present in the source ClusterRole — no expansion or enumeration needed.
 
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/rbac-subtract/<tag or branch>/dist/install.yaml
+```yaml
+# Remove all verbs on apps/deployments
+removeRules:
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - "*"
+
+# Remove all resources in networking.k8s.io
+removeRules:
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - "*"
+  verbs:
+  - get
+
+# Remove everything in the apps API group
+removeRules:
+- apiGroups:
+  - apps
+  resources:
+  - "*"
+  verbs:
+  - "*"
 ```
 
-### By providing a Helm Chart
+## Owner references and cleanup
 
-1. Build the chart using the optional helm plugin
+The target ClusterRole is owned by the `ModifyClusterRole` custom resource via an `ownerReference`. When the `ModifyClusterRole` is deleted, Kubernetes garbage collection automatically removes the target ClusterRole. No manual cleanup or delete handler is needed.
 
-```sh
-kubebuilder edit --plugins=helm/v2-alpha
+## Label and annotation propagation
+
+Labels from the `ModifyClusterRole` custom resource propagate to the target ClusterRole. The label `app.kubernetes.io/managed-by: rbac-subtract` is always present.
+
+Annotations also propagate, excluding system annotations from kubectl (`kubectl.kubernetes.io/*`).
+
+## Deployment prerequisites
+
+The controller's service account (`rbac-subtract-controller-manager`) needs additional RBAC permissions beyond what kubebuilder auto-scaffolds:
+
+- **`escalate` on `clusterroles`** — Required to create ClusterRoles whose rules include permissions the service account does not hold. Without it, Kubernetes RBAC escalation prevention rejects the request.
+- **Leases in `coordination.k8s.io`** — Required for leader election when `--leader-elect` is enabled (default). Needs `get;list;watch;create;update;patch;delete`.
+- **Events** — Recommended for recording reconcile and leader election events. Needs `create;patch` on `events` in the core API group.
+
+All RBAC rules are managed via kubebuilder markers (`// +kubebuilder:rbac:...`) in Go source files and regenerated with `make manifests`.
+
+## Development
+
+```bash
+make test          # Run all tests (unit + envtest integration)
+make build         # Build manager binary to bin/manager
+make run           # Run controller locally against current kubeconfig
+make docker-build  # Build container image
+make deploy        # Deploy CRD + controller to cluster
+make manifests     # Regenerate CRD and RBAC manifests from markers
 ```
 
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
+Requires Go >= 1.25.
 
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
+## Limitations
 
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
+### Source ClusterRole wildcard expansion
 
-**NOTE:** Run `make help` for more information on all potential `make` targets
+The source ClusterRole may contain `"*"` in `resources` and `verbs`. These are expanded to concrete values at reconciliation time using the Kubernetes discovery API:
 
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+- `resources: ["*"]` → expanded to all known resource names in the rule's API groups.
+- `verbs: ["*"]` → expanded to the actual verbs each resource supports (e.g., `get`, `list`, `create`, `delete`). If a resource is not found in the discovery API (e.g., a stale role referencing a removed CRD), the controller raises a permanent error.
 
-## License
+Expansion snapshots the currently-known resources. CRDs installed after reconciliation are not picked up until the next reconciliation (the controller re-reconciles periodically via `REQUEUE_INTERVAL`, default 4h).
 
-Copyright 2026.
+`apiGroups: ["*"]` — rules with a wildcard API group are passed through unchanged. The controller adds the annotation `rbac-subtract.kim.karolinska.se/api-group-wildcard` to the target ClusterRole instead of rejecting.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+Rules with `resourceNames` pass through unchanged regardless of wildcards.
 
-    http://www.apache.org/licenses/LICENSE-2.0
+### `resourceNames` rules pass through unchanged
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+Rules containing `resourceNames` (restricting access to specific named resources) are preserved as-is in the output. Subtraction is skipped for these rules because flattening loses the name restriction, which would accidentally expand permissions.
 
+### `nonResourceURLs` not supported
+
+ClusterRole rules with `nonResourceURLs` (e.g. access to `/healthz`, `/version`) are dropped from the output. The subtraction logic only operates on `apiGroups` + `resources` + `verbs` tuples. Using `nonResourceURLs` in `removeRules` is also unsupported.

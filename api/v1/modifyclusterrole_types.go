@@ -52,6 +52,9 @@ type ModifyClusterRoleStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// +optional
+	RulesCount int32 `json:"rulesCount,omitempty"`
 }
 
 // +kubebuilder:object:root=true

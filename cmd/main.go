@@ -35,8 +35,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	rbacv1 "github.com/timpa0130/rbac-subtract/api/v1"
+	kimv1 "github.com/timpa0130/rbac-subtract/api/v1"
 	"github.com/timpa0130/rbac-subtract/internal/controller"
+	"k8s.io/client-go/discovery"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -48,7 +49,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(rbacv1.AddToScheme(scheme))
+	utilruntime.Must(kimv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -178,9 +179,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(mgr.GetConfig())
+	if err != nil {
+		setupLog.Error(err, "unable to create discovery client")
+		os.Exit(1)
+	}
+
 	if err := (&controller.ModifyClusterRoleReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Discovery: discoveryClient,
+		Scheme:    mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "modifyclusterrole")
 		os.Exit(1)

@@ -6,4 +6,11 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: modifyclusterrole-sample
 spec:
-  # TODO(user): Add fields here
+  clusterRole: view
+  removeRules:
+  - apiGroups:
+    - apps
+    resources:
+    - daemonsets
+    verbs:
+    - '*'
