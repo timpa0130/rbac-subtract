@@ -1,0 +1,61 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kim-postgres
+  annotations:
+    openshift.io/description: |
+      Something that we want to give developers access to.
+      Add something that dosent exist in kind by default so its easy to distinguish
+  labels:
+    kim.rbac/aggregate-to-kim-developer: "true"
+rules:
+  - apiGroups:
+    - postgresql.cnpg.io
+    resources:
+    - imagecatalogs
+    verbs:
+    - get
+    - list
+    - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kim-developer
+  annotations:
+    openshift.io/description: |
+      We use this as an example ClusterRole to demonstrate removing permissions inherited from the view role that normally cannot be removed
+aggregationRule:
+  clusterRoleSelectors:
+  - matchLabels:
+      rbac.authorization.k8s.io/aggregate-to-view: "true"
+  - matchLabels:
+      kim.rbac/aggregate-to-kim-developer: "true"
+---
+apiVersion: kim.karolinska.se/v1
+kind: ModifyClusterRole
+metadata:
+  name: kim-developer-modifed
+  annotations:
+    openshift.io/description: |
+      Here we remove daemonsets because it "to unsafe". And we only allow viewing ingresses (if it would had those permissons)
+spec:
+  clusterRole: kim-developer
+  removeRules:
+  - apiGroups:
+    - apps
+    resources:
+    - daemonsets
+    verbs:
+    - '*'
+  - apiGroups:
+    - networking.k8s.io
+    resources:
+    - ingresses
+    verbs:
+    - create
+    - delete
+    - deletecollection
+    - patch
+    - update

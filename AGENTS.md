@@ -1,5 +1,45 @@
 # rbac-subtract - AI Agent Guide
 
+Kubernetes controller that subtracts permissions from an existing ClusterRole. Fills a gap where a ClusterRole is almost perfect except for a few rules you want to remove — Kubernetes has no native way to do this.
+
+## Architecture
+
+```
+cmd/main.go                           — Manager entry point
+internal/controller/*.go              — Reconciler + integration tests
+pkg/subtract/subtract.go              — Core subtraction logic (pure Go, no K8s deps)
+pkg/subtract/subtract_test.go         — Unit tests (31 cases)
+pkg/wildcard/wildcard.go              — Wildcard expansion via discovery API
+config/crd/bases/                     — Generated CRD (from markers)
+config/rbac/                          — Generated ClusterRole + bindings
+config/manager/                       — Deployment manifest
+examples/                             — Sample ModifyClusterRole manifests
+```
+
+### Core algorithm
+
+1. **Flatten** source rules into `Set[(apiGroup, resource, verb)]` tuples
+2. **Flatten** remove rules the same way
+3. **Subtract** uses wildcard-aware matching (`*` matches any value present in source)
+4. **Regroup** remaining tuples into K8s PolicyRule structs, grouped by `(apiGroup, resource)`
+
+### Code conventions
+
+- Use descriptive variable names — no single-letter names (`gv`, `r`, `v`, `ag`). Loop variables should reflect what they iterate over (`resource`, `group`, `version`, `apiGroup`). Avoid ambiguous abbreviations as prefixes (`ag` for apiGroup); spell them out or pick a full-word noun (`resourceGroup` over `agResourceKey`).
+- `pkg/subtract/` has no K8s client imports — pure logic, testable in isolation
+- New features add unit tests for `pkg/subtract/` first, then wire into the controller
+- RBAC markers are kept in `internal/controller/modifyclusterrole_controller.go` alongside the reconciler they serve
+
+### Design decisions
+
+- **Wildcard expansion** — Source ClusterRole wildcards (`*`) are expanded in `pkg/wildcard/` before `Subtract()` is called via the K8s discovery API:
+  - `resources: ["*"]` expanded via discovery to all resource names in the rule's apiGroups
+  - `verbs: ["*"]` expanded per resource by querying discovery for each resource's actual verb list. Errors if a resource is not found (stale role).
+  - `apiGroups: ["*"]` rejected with permanent error (too broad to expand meaningfully)
+  - Rules with `resourceNames` pass through unchanged regardless of wildcards
+- **Owner reference GC** — Target ClusterRoles are owned by their ModifyClusterRole CR via `ownerReferences`. No delete handler needed — K8s garbage collection cleans up the ClusterRole when the CR is deleted.
+- **Label/annotation propagation** — CR labels (with `app.kubernetes.io/managed-by: rbac-subtract` always present) and annotations (excluding `kubectl.kubernetes.io/*`) propagate to the target ClusterRole.
+
 ## Project Structure
 
 **Single-group layout (default):**
@@ -9,6 +49,9 @@ api/<version>/*_types.go       CRD schemas (+kubebuilder markers)
 api/<version>/zz_generated.*   Auto-generated (DO NOT EDIT)
 internal/controller/*          Reconciliation logic
 internal/webhook/*             Validation/defaulting (if present)
+pkg/subtract/subtract.go       Core subtraction logic (pure Go, no K8s deps)
+pkg/subtract/subtract_test.go  Unit tests (31 cases)
+pkg/wildcard/wildcard.go       Wildcard expansion via discovery API
 config/crd/bases/*             Generated CRDs (DO NOT EDIT)
 config/rbac/role.yaml          Generated RBAC (DO NOT EDIT)
 config/samples/*               Example CRs (edit these)
