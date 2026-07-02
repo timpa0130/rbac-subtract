@@ -3,7 +3,6 @@ package wildcard
 import (
 	"errors"
 	"slices"
-	"sort"
 
 	"github.com/go-logr/logr"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -48,7 +47,7 @@ func ExpandWildcards(discoveryClient discovery.DiscoveryInterface, rules []rbacv
 			// If this happens we want a label on the resource we will create.
 			// Warning that the subtraction may not work correctly.
 			hadWildcardAPI = true
-			log.V(0).Info("passing through rule with '*' in apiGroups — subtraction skipped",
+			log.Info("passing through rule with '*' in apiGroups — subtraction skipped",
 				"apiGroups", rule.APIGroups,
 				"resources", rule.Resources,
 				"verbs", rule.Verbs,
@@ -180,7 +179,7 @@ func hasWildcard(items []string) bool {
 
 func dedupeSorted(existing, new []string) []string {
 	combined := append(existing, new...)
-	// Creating a map with a bool is a more efficent approach
+	// Creating a map with a bool is a more efficient approach
 	// For 100 items: map does ~100 lookups, slice does ~5,000
 	seen := make(map[string]bool)
 	var result []string
@@ -190,6 +189,6 @@ func dedupeSorted(existing, new []string) []string {
 			result = append(result, item)
 		}
 	}
-	sort.Strings(result)
+	slices.Sort(result)
 	return result
 }

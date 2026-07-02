@@ -32,24 +32,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - kim.karolinska.se
-  resources:
-  - modifyclusterroles
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - kim.karolinska.se
-  resources:
-  - modifyclusterroles/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - clusterroles
@@ -62,3 +44,21 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - rbac.kim.karolinska.se
+  resources:
+  - modifyclusterroles
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.kim.karolinska.se
+  resources:
+  - modifyclusterroles/status
+  verbs:
+  - get
+  - patch
+  - update

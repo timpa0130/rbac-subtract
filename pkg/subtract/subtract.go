@@ -1,9 +1,9 @@
 package subtract
 
 import (
+	"cmp"
 	"maps"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -77,9 +77,9 @@ func Regroup(permissions map[Permission]struct{}) []rbacv1.PolicyRule {
 		merged[mergedKey][key.resource] = struct{}{}
 	}
 
-	//   Step 3: convert to sorted PolicyRules
+	//	 Step 3: convert to sorted PolicyRules
 	//   merged[(apiGroup, "verb1,verb2")] = {resource, ...}  →  []PolicyRule
-	var rules []rbacv1.PolicyRule
+	rules := make([]rbacv1.PolicyRule, 0, len(merged))
 	for key, resourceSet := range merged {
 		verbList := strings.Split(key.verbs, ",")
 		if key.verbs == "" {
@@ -92,11 +92,16 @@ func Regroup(permissions map[Permission]struct{}) []rbacv1.PolicyRule {
 		})
 	}
 
-	sort.Slice(rules, func(i, j int) bool {
-		if rules[i].APIGroups[0] != rules[j].APIGroups[0] {
-			return rules[i].APIGroups[0] < rules[j].APIGroups[0]
+	//	 Step 4: Sort the rules for idempotency
+	// 	 this is important so we dont endlessly update because its not sorted
+	//   	return: "is element at a less than element at b?"
+	slices.SortFunc(rules, func(a, b rbacv1.PolicyRule) int {
+		// if apiGroups are not the same we compare them, it can only return -1 or 1 then.
+		if a.APIGroups[0] != b.APIGroups[0] {
+			return cmp.Compare(a.APIGroups[0], b.APIGroups[0]) // int: -1/0/1
 		}
-		return strings.Join(rules[i].Verbs, ",") < strings.Join(rules[j].Verbs, ",")
+		// The apiGroup is the same compare the verbs and sort
+		return cmp.Compare(strings.Join(a.Verbs, ","), strings.Join(b.Verbs, ","))
 	})
 
 	return rules
