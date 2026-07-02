@@ -4,5 +4,5 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
 - name: controller
-  newName: subtract
-  newTag: v1
+  newName: ghcr.io/timpa0130/rbac-subtract
+  newTag: latest
