@@ -1,9 +1,9 @@
 package subtract
 
 import (
+	"cmp"
 	"maps"
 	"slices"
-	"cmp"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -97,11 +97,11 @@ func Regroup(permissions map[Permission]struct{}) []rbacv1.PolicyRule {
 	//   	return: "is element at a less than element at b?"
 	slices.SortFunc(rules, func(a, b rbacv1.PolicyRule) int {
 		// if apiGroups are not the same we compare them, it can only return -1 or 1 then.
-	    if a.APIGroups[0] != b.APIGroups[0] {
-	        return cmp.Compare(a.APIGroups[0], b.APIGroups[0])  // int: -1/0/1
-	    }
+		if a.APIGroups[0] != b.APIGroups[0] {
+			return cmp.Compare(a.APIGroups[0], b.APIGroups[0]) // int: -1/0/1
+		}
 		// The apiGroup is the same compare the verbs and sort
-	    return cmp.Compare(strings.Join(a.Verbs, ","), strings.Join(b.Verbs, ","))
+		return cmp.Compare(strings.Join(a.Verbs, ","), strings.Join(b.Verbs, ","))
 	})
 
 	return rules
