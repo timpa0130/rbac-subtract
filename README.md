@@ -212,12 +212,12 @@ All RBAC rules are managed via kubebuilder markers (`// +kubebuilder:rbac:...`) 
 ## Development
 
 ```bash
-make test          # Run all tests (unit + envtest integration)
-make build         # Build manager binary to bin/manager
-make run           # Run controller locally against current kubeconfig
+make lint-fix      # Run golangci-lint linter and perform fixes
 make docker-build  # Build container image
-make deploy        # Deploy CRD + controller to cluster
 make manifests     # Regenerate CRD and RBAC manifests from markers
+make deploy        # Deploy CRD + controller to cluster
+make test          # Run all tests (unit + envtest integration)
+make help          # For more commands
 ```
 
 Requires Go >= 1.25.
