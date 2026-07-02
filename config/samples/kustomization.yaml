@@ -1,4 +1,0 @@
-## Append samples of your project ##
-resources:
-- rbac_v1_modifyclusterrole.yaml
-# +kubebuilder:scaffold:manifestskustomizesamples
