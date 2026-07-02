@@ -3,18 +3,9 @@
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
 cliVersion: 4.15.0
-domain: karolinska.se
+domain: kim.karolinska.se
 layout:
 - go.kubebuilder.io/v4
 projectName: rbac-subtract
 repo: github.com/timpa0130/rbac-subtract
-resources:
-- api:
-    crdVersion: v1
-  controller: true
-  domain: karolinska.se
-  group: kim
-  kind: ModifyClusterRole
-  path: github.com/timpa0130/rbac-subtract/api/v1
-  version: v1
 version: "3"
