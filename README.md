@@ -293,14 +293,11 @@ Rules containing `resourceNames` (restricting access to specific named resources
 
 ### Aggregated ClusterRoles (`aggregationRule`)
 
-If the target ClusterRole already exists and has an `.aggregationRule`, the controller strips it and takes full ownership of the rules. This is intentional: an aggregated ClusterRole is autofilled by the Kubernetes RBAC controller based on the `clusterRoleSelector` labels, which means any rules the operator writes would be overwritten on the next aggregation pass.
+For an aggregated source, give the `ModifyClusterRole` a different name. rbac-subtract reads the source's current rules and writes the result to a separate target, leaving the source under Kubernetes RBAC aggregation. Source changes are picked up on a later reconciliation (default interval: 4h).
 
-When you point a `ModifyClusterRole` at a target name that matches a pre-existing aggregated ClusterRole:
-- The `aggregationRule` field is removed.
-- The operator's computed rules replace whatever rules existed before.
-- The target ClusterRole becomes a standalone (non-aggregated) role owned and managed entirely by the operator.
+If the target already has an `.aggregationRule`, rbac-subtract leaves it unchanged and marks the `ModifyClusterRole` as degraded. Choose a different target name to preserve the aggregated role.
 
-If you need to subtract rules from an aggregated ClusterRole, create a new target name instead — the operator will create a fresh standalone ClusterRole derived from the source, leaving the original aggregated ClusterRole intact.
+This also applies when the source and `ModifyClusterRole` have the same name: the source is the target, so rbac-subtract leaves it unchanged.
 
 ### `nonResourceURLs` not supported
 
