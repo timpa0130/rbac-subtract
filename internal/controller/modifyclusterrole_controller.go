@@ -155,13 +155,14 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		},
 	}
 
+	targetIsAggregated := false
 	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, target, func() error {
+		if target.AggregationRule != nil {
+			targetIsAggregated = true
+			return nil
+		}
 		if err := controllerutil.SetControllerReference(&cr, target, r.Scheme); err != nil {
 			return err
-		}
-		if target.AggregationRule != nil {
-			logger.Info("The target ClusterRole contains a AggregationRule, Removing it")
-			target.AggregationRule = nil
 		}
 		target.Labels = labels
 		target.Annotations = annotations
@@ -181,6 +182,29 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			logger.Error(updateErr, "Failed to update status condition")
 		}
 		return ctrl.Result{}, err
+	}
+	if targetIsAggregated {
+		message := fmt.Sprintf("Target ClusterRole %q has an aggregationRule; choose a different target name", cr.Name)
+		logger.Info("Leaving aggregated target ClusterRole unchanged", "targetName", cr.Name)
+		meta.SetStatusCondition(&cr.Status.Conditions, metav1.Condition{
+			Type:               "Available",
+			Status:             metav1.ConditionFalse,
+			Reason:             "TargetAggregated",
+			Message:            message,
+			ObservedGeneration: cr.Generation,
+		})
+		meta.SetStatusCondition(&cr.Status.Conditions, metav1.Condition{
+			Type:               "Degraded",
+			Status:             metav1.ConditionTrue,
+			Reason:             "TargetAggregated",
+			Message:            message,
+			ObservedGeneration: cr.Generation,
+		})
+		if updateErr := r.Status().Update(ctx, &cr); updateErr != nil {
+			logger.Error(updateErr, "Failed to update status condition")
+			return ctrl.Result{}, updateErr
+		}
+		return ctrl.Result{RequeueAfter: reconcileInterval}, nil
 	}
 	logger.Info("Reconciled target ClusterRole", "operation", result, "rulesCount", len(resultingRules))
 

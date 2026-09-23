@@ -8,6 +8,7 @@ import (
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	fakediscovery "k8s.io/client-go/discovery/fake"
@@ -88,23 +89,30 @@ var _ = Describe("ModifyClusterRole Controller", func() {
 			}))
 		})
 
-		It("strips existing AggregationRule from target ClusterRole", func() {
+		It("leaves an aggregated target unchanged and reports the conflict", func() {
 			const aggTargetName = "test-agg-target"
 
-			target := &rbacv1.ClusterRole{
-				ObjectMeta: metav1.ObjectMeta{Name: aggTargetName},
-				AggregationRule: &rbacv1.AggregationRule{
-					ClusterRoleSelectors: []metav1.LabelSelector{
-						{MatchLabels: map[string]string{"rbac.example.com/aggregate-to-view": "true"}},
-					},
+			aggregationRule := &rbacv1.AggregationRule{
+				ClusterRoleSelectors: []metav1.LabelSelector{
+					{MatchLabels: map[string]string{"rbac.example.com/aggregate-to-view": "true"}},
 				},
+			}
+			targetRules := []rbacv1.PolicyRule{{
+				APIGroups: []string{"apps"},
+				Resources: []string{"deployments"},
+				Verbs:     []string{"get", "list"},
+			}}
+			target := &rbacv1.ClusterRole{
+				ObjectMeta:      metav1.ObjectMeta{Name: aggTargetName},
+				AggregationRule: aggregationRule,
+				Rules:           targetRules,
 			}
 			Expect(k8sClient.Create(ctx, target)).To(Succeed())
 
 			cr := &kimv1.ModifyClusterRole{
 				ObjectMeta: metav1.ObjectMeta{Name: aggTargetName},
 				Spec: kimv1.ModifyClusterRoleSpec{
-					ClusterRole: sourceName,
+					ClusterRole: aggTargetName,
 					RemoveRules: []kimv1.RemoveRule{
 						{APIGroups: []string{"apps"}, Resources: []string{"deployments"}, Verbs: []string{"list"}},
 					},
@@ -123,7 +131,23 @@ var _ = Describe("ModifyClusterRole Controller", func() {
 			var updated rbacv1.ClusterRole
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: aggTargetName}, &updated)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(updated.AggregationRule).To(BeNil())
+			Expect(updated.AggregationRule).To(Equal(aggregationRule))
+			Expect(updated.Rules).To(Equal(targetRules))
+			Expect(updated.OwnerReferences).To(BeEmpty())
+			Expect(updated.Labels).To(BeEmpty())
+
+			var updatedCR kimv1.ModifyClusterRole
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: aggTargetName}, &updatedCR)
+			Expect(err).NotTo(HaveOccurred())
+			available := meta.FindStatusCondition(updatedCR.Status.Conditions, "Available")
+			Expect(available).NotTo(BeNil())
+			Expect(available.Status).To(Equal(metav1.ConditionFalse))
+			Expect(available.Reason).To(Equal("TargetAggregated"))
+			degraded := meta.FindStatusCondition(updatedCR.Status.Conditions, "Degraded")
+			Expect(degraded).NotTo(BeNil())
+			Expect(degraded.Status).To(Equal(metav1.ConditionTrue))
+			Expect(degraded.Reason).To(Equal("TargetAggregated"))
+			Expect(degraded.Message).To(ContainSubstring("choose a different target name"))
 
 			_ = k8sClient.Delete(ctx, &kimv1.ModifyClusterRole{ObjectMeta: metav1.ObjectMeta{Name: aggTargetName}})
 			_ = k8sClient.Delete(ctx, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: aggTargetName}})
