@@ -30,9 +30,9 @@ This reads the existing `edit` ClusterRole, removes `list` on `networking.k8s.io
 
 The controller reconciles in two phases:
 
-**Phase 1: Wildcard expansion** — Before subtraction, `*` in the source ClusterRole's `resources` and `verbs` are expanded to concrete values by querying the Kubernetes discovery API. Rules with `resourceNames` or `apiGroups: ["*"]` pass through unchanged. This produces a fully concrete set of rules to subtract from.
+**Phase 1: Wildcard expansion** — Before subtraction, `*` in the source ClusterRole's `resources` and `verbs`, and RBAC's `*/subresource` form (e.g. `*/scale`), are expanded to concrete values by querying the Kubernetes discovery API. Rules with `apiGroups: ["*"]` pass through unchanged. This produces a fully concrete set of rules to subtract from.
 
-**Phase 2: Rule subtraction** — The expanded source rules and the `removeRules` are both flattened into `(apiGroup, resource, verb)` tuples. Matching tuples are removed. The remaining tuples are regrouped into efficient PolicyRule dicts (merging resources that share identical API groups and verbs). The output is deterministically sorted.
+**Phase 2: Rule subtraction** — The expanded source rules and the `removeRules` are both flattened into `(apiGroup, resource, resourceName, verb)` tuples, where an empty resource name means the grant is not restricted to named objects. Matching tuples are removed. The remaining tuples are regrouped into efficient PolicyRule dicts (merging resources that share identical API groups and verbs, and resource names that share identical resources and verbs). The output is deterministically sorted. Access that remains on targeted resources through subresources or resource names is reported in `status.remainingGrants` (see [Exact matching](#exact-matching-subresources-and-resourcenames)).
 
 After subtraction, the controller creates or updates a target ClusterRole named after the `ModifyClusterRole` CR using `CreateOrUpdate` (idempotent), sets an owner reference so Kubernetes garbage-collects the target when the CR is deleted, and propagates labels and annotations from the CR. The CR status is updated with `rulesCount` — the number of rules in the generated ClusterRole. Reconciliation re-queues periodically (default every 4h, configurable via `REQUEUE_INTERVAL`).
 
@@ -195,6 +195,41 @@ removeRules:
   - "*"
 ```
 
+## Exact matching: subresources and resourceNames
+
+`removeRules` remove exactly what they name, like RBAC grants exactly what a rule names. Two things are therefore never removed implicitly:
+
+- **Subresources.** In RBAC, `pods/exec` is a separate resource from `pods`. Removing `pods` does not remove `pods/exec`, `pods/attach` or `pods/portforward`. The built-in `edit` role grants all of these, so name them if you want them gone.
+- **Grants restricted to `resourceNames`.** A `removeRule` without `resourceNames` only removes grants that are not restricted to names. To remove a named grant, list the same names:
+
+```yaml
+removeRules:
+- apiGroups: [""]
+  resources: [configmaps]
+  resourceNames: [my-config]
+  verbs: [get]
+```
+
+Names match exactly; there are no name wildcards. `"*"` in `resources` and `verbs` still matches subresources and every verb, with or without `resourceNames`.
+
+When a `removeRule` targets a resource and no unrestricted access to it is left, but access remains through a subresource or a named grant, the controller lists it in `status.remainingGrants`:
+
+```yaml
+status:
+  remainingGrants:
+  - apiGroup: ""
+    resource: configmaps
+    resourceNames: [my-config]
+    verbs: [get]
+    reason: ResourceNames
+  - apiGroup: ""
+    resource: pods/exec
+    verbs: [create]
+    reason: Subresource
+```
+
+The list is recomputed on every reconciliation and is empty once the `removeRules` name everything. It is informational: the `ModifyClusterRole` stays `Available`.
+
 ## Owner references and cleanup
 
 The target ClusterRole is owned by the `ModifyClusterRole` custom resource via an `ownerReference`. When the `ModifyClusterRole` is deleted, Kubernetes garbage collection automatically removes the target ClusterRole. No manual cleanup or delete handler is needed.
@@ -223,24 +258,27 @@ All RBAC rules are managed via kubebuilder markers (`// +kubebuilder:rbac:...`) 
 
 The core logic that removes permissions from a set of RBAC rules.
 
-**`Type Permission`** — `{APIGroup, Resource, Verb string}` tuple. The granular unit of RBAC that the engine operates on.
+**`Type Permission`** — `{APIGroup, Resource, ResourceName, Verb string}` tuple. The granular unit of RBAC that the engine operates on. An empty `ResourceName` means the grant is not restricted to named objects.
 
-**`Flatten(rules) → set[Permission]`** — Expands `PolicyRule` dicts into individual `(apiGroup, resource, verb)` tuples. One rule with 2 resources × 3 verbs = 6 tuples.
+**`Flatten(rules) → set[Permission]`** — Expands `PolicyRule` dicts into individual `(apiGroup, resource, resourceName, verb)` tuples. One rule with 2 resources × 3 verbs = 6 tuples.
 
-**`Matches(source, pattern) → bool`** — Checks whether a source tuple matches a removal pattern. `"*"` in the pattern acts as wildcard (matches any value).
+**`Matches(source, pattern) → bool`** — Checks whether a source tuple matches a removal pattern. `"*"` in the pattern's API group, resource or verb acts as wildcard (matches any value). Resource names always match exactly.
 
-**`Regroup(permissions) → []PolicyRule`** — Reverse of flatten. Groups tuples back into efficient PolicyRule dicts by merging resources that share identical API groups and verbs. Output is deterministically sorted for idempotency.
+**`Regroup(permissions) → []PolicyRule`** — Reverse of flatten. Groups tuples back into efficient PolicyRule dicts by merging resources that share identical API groups and verbs, then resource names that share identical resources and verbs. Output is deterministically sorted for idempotency.
 
-**`Subtract(source, remove) → []PolicyRule`** — The main entry point. Separates pass-through rules (those with `resourceNames` or wildcard `apiGroups`), flattens the rest, subtracts matching tuples, regroups the remainder, and appends pass-through rules.
+**`Subtract(source, remove) → []PolicyRule`** — The main entry point. Separates pass-through rules (those with wildcard `apiGroups`), flattens the rest, subtracts matching tuples, regroups the remainder, and appends pass-through rules.
 
-**How the 4-step regroup works:**
+**`RemainingGrants(result, remove) → []RemainingGrant`** — Reports access left on resources the `removeRules` targeted: subresources whose parent has no unrestricted verbs left (`Subresource`), and named grants on a resource with no unrestricted verbs left (`ResourceNames`). Sorted for idempotency; the controller writes it to `status.remainingGrants`.
+
+**How the 5-step regroup works:**
 
 | Step | Input | Output |
 |------|-------|--------|
 | 1. Collect verbs | `{(apps,deployments,get), (apps,deployments,list), (apps,statefulsets,get), (apps,statefulsets,list)}` | `{apps/deployments: {get,list}, apps/statefulsets: {get,list}}` |
 | 2. Merge by verbs | (above) | `{(apps,"get,list"): {deployments, statefulsets}}` |
-| 3. Build rules | (above) | `PolicyRule{APIGroups: ["apps"], Resources: ["deployments","statefulsets"], Verbs: ["get","list"]}` |
-| 4. Sort | (rules from step 3) | Deterministically ordered rules (by apiGroup, then verbs) |
+| 3. Merge names | Named tuples only, e.g. `{(,configmaps,a,get), (,configmaps,b,get)}` | `{(,"get","configmaps"): {a, b}}`; unrestricted entries stay apart |
+| 4. Build rules | (above) | `PolicyRule{APIGroups: ["apps"], Resources: ["deployments","statefulsets"], Verbs: ["get","list"]}` |
+| 5. Sort | (rules from step 4) | Deterministically ordered rules (by apiGroup, unrestricted before named, then verbs, resources and names) |
 
 ### `pkg/wildcard` — Wildcard expansion from discovery API
 
@@ -248,15 +286,17 @@ Expands `"*"` in source ClusterRole rules to concrete values by querying the Kub
 
 **`ExpandWildcards(discoveryClient, rules) → ([]PolicyRule, hasWildcardAPI bool, error)`** — The main entry point. Handles three cases for each rule:
 
-- **`resourceNames` present** — passes through unchanged.
 - **`apiGroups: ["*"]`** — passes through unchanged, sets `hasWildcardAPI=true` (controller adds an annotation to warn).
 - **`resources: ["*"]` and/or `verbs: ["*"]`** — expands to all known resources/verbs in the rule's API groups using the discovery API.
+- **`resources: ["*/scale"]`** — RBAC's `*/subresource` form expands to every resource in the rule's API groups with that subresource (e.g. `deployments/scale`, `statefulsets/scale`).
+
+Rules with `resourceNames` are expanded the same way and keep their names.
 
 **Internal flow:**
 1. `collectApiGroups` — gathers unique API groups from rules, excluding pass-through rules.
 2. `fetchApiGroupVersions` — resolves API group names to their available versions.
 3. `discoverResources` — fetches all resources and their verbs for each group version. Builds a cache: `apiGroup → resourceName → []verbs`.
-4. `expandResourceNames` — replaces `"*"` with all resource names from the cache.
+4. `expandResourceNames` — replaces `"*"` with all resource names from the cache. `expandSubresources` replaces `"*/subresource"` with the matching resource names.
 5. `expandVerbs` — replaces `"*"` with the actual verbs each resource supports. Errors if a resource is not found (e.g. stale role referencing a removed CRD).
 
 **Caching note:** Expansion snapshots the currently-known resources at reconciliation time. CRDs installed later are picked up on the next reconciliation (re-queued via `REQUEUE_INTERVAL`, default 4h).
@@ -281,17 +321,14 @@ Requires Go >= 1.25.
 The source ClusterRole may contain `"*"` in `resources` and `verbs`. These are expanded to concrete values at reconciliation time using the Kubernetes discovery API:
 
 - `resources: ["*"]` → expanded to all known resource names in the rule's API groups.
+- `resources: ["*/scale"]` → expanded to every known resource in the rule's API groups with that subresource.
 - `verbs: ["*"]` → expanded to the actual verbs each resource supports (e.g., `get`, `list`, `create`, `delete`). If a resource is not found in the discovery API (e.g., a stale role referencing a removed CRD), the controller raises a permanent error.
 
 Expansion snapshots the currently-known resources. CRDs installed after reconciliation are not picked up until the next reconciliation (the controller re-reconciles periodically via `REQUEUE_INTERVAL`, default 4h).
 
 `apiGroups: ["*"]` — rules with a wildcard API group are passed through unchanged. The controller adds the annotation `subtract.rbac.kim.karolinska.se/api-group-wildcard` to the target ClusterRole instead of rejecting.
 
-Rules with `resourceNames` pass through unchanged regardless of wildcards.
-
-### `resourceNames` rules pass through unchanged
-
-Rules containing `resourceNames` (restricting access to specific named resources) are preserved as-is in the output. Subtraction is skipped for these rules because flattening loses the name restriction, which would accidentally expand permissions.
+Rules with `resourceNames` are expanded the same way and keep their names. Note that `verbs: ["*"]` expands to the verbs discovery reports, so verbs it does not list (such as `use`, `bind` or `escalate`) are not carried over.
 
 ### Aggregated ClusterRoles (`aggregationRule`)
 

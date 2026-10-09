@@ -244,6 +244,70 @@ var _ = Describe("ModifyClusterRole Controller", func() {
 			Expect(available.Status).To(Equal(metav1.ConditionTrue))
 		})
 
+		It("reports access that remains on targeted resources until the removeRules name it", func() {
+			const remainingName = "test-remaining"
+			const remainingSourceName = "test-remaining-source"
+
+			source := &rbacv1.ClusterRole{
+				ObjectMeta: metav1.ObjectMeta{Name: remainingSourceName},
+				Rules: []rbacv1.PolicyRule{
+					{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get", "list"}},
+					{APIGroups: []string{""}, Resources: []string{"pods/exec"}, Verbs: []string{"create"}},
+					{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}},
+					{APIGroups: []string{""}, Resources: []string{"configmaps"}, ResourceNames: []string{"my-config"}, Verbs: []string{"get"}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, source)).To(Succeed())
+			cr := &kimv1.ModifyClusterRole{
+				ObjectMeta: metav1.ObjectMeta{Name: remainingName},
+				Spec: kimv1.ModifyClusterRoleSpec{
+					ClusterRole: remainingSourceName,
+					RemoveRules: []kimv1.RemoveRule{
+						{APIGroups: []string{""}, Resources: []string{"pods", "configmaps"}, Verbs: []string{"*"}},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			reconciler := &ModifyClusterRoleReconciler{
+				Client:    k8sClient,
+				Discovery: &fakediscovery.FakeDiscovery{Fake: &testing.Fake{}},
+				Scheme:    k8sClient.Scheme(),
+			}
+			request := reconcile.Request{NamespacedName: types.NamespacedName{Name: remainingName}}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+
+			var updatedCR kimv1.ModifyClusterRole
+			Expect(k8sClient.Get(ctx, request.NamespacedName, &updatedCR)).To(Succeed())
+			Expect(updatedCR.Status.RemainingGrants).To(Equal([]kimv1.RemainingGrant{
+				{APIGroup: "", Resource: "configmaps", ResourceNames: []string{"my-config"}, Verbs: []string{"get"}, Reason: "ResourceNames"},
+				{APIGroup: "", Resource: "pods/exec", Verbs: []string{"create"}, Reason: "Subresource"},
+			}))
+			available := meta.FindStatusCondition(updatedCR.Status.Conditions, "Available")
+			Expect(available).NotTo(BeNil())
+			Expect(available.Status).To(Equal(metav1.ConditionTrue))
+
+			By("naming the remaining grants in the removeRules")
+			updatedCR.Spec.RemoveRules = append(updatedCR.Spec.RemoveRules,
+				kimv1.RemoveRule{APIGroups: []string{""}, Resources: []string{"pods/exec"}, Verbs: []string{"*"}},
+				kimv1.RemoveRule{APIGroups: []string{""}, Resources: []string{"configmaps"}, ResourceNames: []string{"my-config"}, Verbs: []string{"*"}},
+			)
+			Expect(k8sClient.Update(ctx, &updatedCR)).To(Succeed())
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, request.NamespacedName, &updatedCR)).To(Succeed())
+			Expect(updatedCR.Status.RemainingGrants).To(BeEmpty())
+			var target rbacv1.ClusterRole
+			Expect(k8sClient.Get(ctx, request.NamespacedName, &target)).To(Succeed())
+			Expect(target.Rules).To(BeEmpty())
+
+			_ = k8sClient.Delete(ctx, &kimv1.ModifyClusterRole{ObjectMeta: metav1.ObjectMeta{Name: remainingName}})
+			_ = k8sClient.Delete(ctx, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: remainingName}})
+			_ = k8sClient.Delete(ctx, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: remainingSourceName}})
+		})
+
 		It("reports missing source ClusterRole", func() {
 			cr := &kimv1.ModifyClusterRole{
 				ObjectMeta: metav1.ObjectMeta{Name: "no-source"},

@@ -27,8 +27,35 @@ type RemoveRule struct {
 	// +kubebuilder:validation:MinItems=1
 	Resources []string `json:"resources"`
 
+	// ResourceNames restricts the rule to the named objects. A rule without resourceNames only
+	// removes grants that are not restricted to names, so named grants must be listed explicitly.
+	// +optional
+	ResourceNames []string `json:"resourceNames,omitempty"`
+
 	// +kubebuilder:validation:MinItems=1
 	Verbs []string `json:"verbs"`
+}
+
+// RemainingGrant is access that is still granted on a resource targeted by removeRules,
+// through a subresource or resourceNames that the removeRules did not name.
+type RemainingGrant struct {
+	// APIGroup of the resource; empty for the core group
+	APIGroup string `json:"apiGroup"`
+
+	// Resource that is still granted, e.g. pods/exec
+	Resource string `json:"resource"`
+
+	// ResourceNames the grant is restricted to, if any
+	// +optional
+	ResourceNames []string `json:"resourceNames,omitempty"`
+
+	// Verbs that are still granted
+	Verbs []string `json:"verbs"`
+
+	// Reason the grant remains: Subresource when the parent resource was removed but this
+	// subresource was not, ResourceNames when unnamed access was removed but this named grant was not
+	// +kubebuilder:validation:Enum=Subresource;ResourceNames
+	Reason string `json:"reason"`
 }
 
 // ModifyClusterRoleStatus defines the observed state of ModifyClusterRole.
@@ -48,6 +75,12 @@ type ModifyClusterRoleStatus struct {
 	// Number of rules in the generated ClusterRole
 	// +optional
 	RulesCount int32 `json:"rulesCount,omitempty"`
+
+	// RemainingGrants lists access that is still granted on resources targeted by removeRules,
+	// because it comes through subresources or resourceNames that the removeRules did not name
+	// +listType=atomic
+	// +optional
+	RemainingGrants []RemainingGrant `json:"remainingGrants,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -54,6 +54,13 @@ spec:
                         type: string
                       minItems: 1
                       type: array
+                    resourceNames:
+                      description: |-
+                        ResourceNames restricts the rule to the named objects. A rule without resourceNames only
+                        removes grants that are not restricted to names, so named grants must be listed explicitly.
+                      items:
+                        type: string
+                      type: array
                     resources:
                       items:
                         type: string
@@ -139,6 +146,47 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              remainingGrants:
+                description: |-
+                  RemainingGrants lists access that is still granted on resources targeted by removeRules,
+                  because it comes through subresources or resourceNames that the removeRules did not name
+                items:
+                  description: |-
+                    RemainingGrant is access that is still granted on a resource targeted by removeRules,
+                    through a subresource or resourceNames that the removeRules did not name.
+                  properties:
+                    apiGroup:
+                      description: APIGroup of the resource; empty for the core group
+                      type: string
+                    reason:
+                      description: |-
+                        Reason the grant remains: Subresource when the parent resource was removed but this
+                        subresource was not, ResourceNames when unnamed access was removed but this named grant was not
+                      enum:
+                      - Subresource
+                      - ResourceNames
+                      type: string
+                    resource:
+                      description: Resource that is still granted, e.g. pods/exec
+                      type: string
+                    resourceNames:
+                      description: ResourceNames the grant is restricted to, if any
+                      items:
+                        type: string
+                      type: array
+                    verbs:
+                      description: Verbs that are still granted
+                      items:
+                        type: string
+                      type: array
+                  required:
+                  - apiGroup
+                  - reason
+                  - resource
+                  - verbs
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
               rulesCount:
                 description: Number of rules in the generated ClusterRole
                 format: int32
