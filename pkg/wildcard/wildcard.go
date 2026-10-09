@@ -3,6 +3,7 @@ package wildcard
 import (
 	"errors"
 	"slices"
+	"strings"
 
 	"github.com/go-logr/logr"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -33,16 +34,6 @@ func ExpandWildcards(discoveryClient discovery.DiscoveryInterface, rules []rbacv
 	// Here we need to build a new the expanded single instance of rbacv1.PolicyRule
 	for _, rule := range rules {
 		// We need to check if the rule can be proccesed, if not pass it through as is.
-		if len(rule.ResourceNames) > 0 {
-			log.V(1).Info("passing through rule with resourceNames — subtraction skipped",
-				"apiGroups", rule.APIGroups,
-				"resources", rule.Resources,
-				"resourceNames", rule.ResourceNames,
-				"verbs", rule.Verbs,
-			)
-			expanded = append(expanded, rule)
-			continue
-		}
 		if hasWildcard(rule.APIGroups) {
 			// If this happens we want a label on the resource we will create.
 			// Warning that the subtraction may not work correctly.
@@ -63,6 +54,9 @@ func ExpandWildcards(discoveryClient discovery.DiscoveryInterface, rules []rbacv
 		if hasWildcard(resources) {
 			resources = expandResourceNames(scopedCache, rule.APIGroups)
 			log.V(1).Info("expanded resources", "count", len(resources))
+		} else if hasSubresourceWildcard(resources) {
+			resources = expandSubresources(scopedCache, rule.APIGroups, resources)
+			log.V(1).Info("expanded subresources", "count", len(resources))
 		}
 
 		// The verbs in this rule has a wildcard expand it to the available verbs
@@ -75,9 +69,10 @@ func ExpandWildcards(discoveryClient discovery.DiscoveryInterface, rules []rbacv
 
 		// Append the expanded rule to the 	"var expanded []rbacv1.PolicyRule"
 		expanded = append(expanded, rbacv1.PolicyRule{
-			APIGroups: rule.APIGroups,
-			Resources: resources,
-			Verbs:     verbs,
+			APIGroups:     rule.APIGroups,
+			Resources:     resources,
+			ResourceNames: rule.ResourceNames,
+			Verbs:         verbs,
 		})
 	}
 	return expanded, hadWildcardAPI, nil
@@ -87,7 +82,7 @@ func collectApiGroups(rules []rbacv1.PolicyRule) []string {
 	var all []string
 	for _, rule := range rules {
 		// Exclude pass-through rules as we dont want to process those
-		if len(rule.ResourceNames) > 0 || hasWildcard(rule.APIGroups) {
+		if hasWildcard(rule.APIGroups) {
 			continue
 		}
 		all = append(all, rule.APIGroups...)
@@ -153,6 +148,27 @@ func expandResourceNames(cache map[string]map[string][]string, apiGroups []strin
 	return dedupeSorted(nil, allNames)
 }
 
+// expandSubresources replaces RBAC's "*/subresource" form (e.g. "*/scale") with every resource across
+// the given apiGroups that has that subresource (e.g. "deployments/scale"). Other entries are kept.
+func expandSubresources(cache map[string]map[string][]string, apiGroups, resources []string) []string {
+	var expanded []string
+	for _, resource := range resources {
+		subresource, isWildcard := strings.CutPrefix(resource, "*/")
+		if !isWildcard {
+			expanded = append(expanded, resource)
+			continue
+		}
+		for _, apiGroup := range apiGroups {
+			for resourceName := range cache[apiGroup] {
+				if _, sub, found := strings.Cut(resourceName, "/"); found && sub == subresource {
+					expanded = append(expanded, resourceName)
+				}
+			}
+		}
+	}
+	return dedupeSorted(nil, expanded)
+}
+
 // expandVerbs resolves the verbs for each resource across the rule's apiGroups,
 // returning a deduplicated sorted list. A rule with multiple apiGroups applies
 // the same verbs to a resource across all groups, so we union the results.
@@ -175,6 +191,12 @@ func expandVerbs(cache map[string]map[string][]string, apiGroups, resources []st
 
 func hasWildcard(items []string) bool {
 	return slices.Contains(items, "*")
+}
+
+func hasSubresourceWildcard(resources []string) bool {
+	return slices.ContainsFunc(resources, func(resource string) bool {
+		return strings.HasPrefix(resource, "*/")
+	})
 }
 
 func dedupeSorted(existing, new []string) []string {

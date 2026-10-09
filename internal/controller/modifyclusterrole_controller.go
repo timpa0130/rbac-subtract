@@ -106,9 +106,10 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	removeRules := make([]rbacv1.PolicyRule, len(cr.Spec.RemoveRules))
 	for i, rr := range cr.Spec.RemoveRules {
 		removeRules[i] = rbacv1.PolicyRule{
-			APIGroups: rr.APIGroups,
-			Resources: rr.Resources,
-			Verbs:     rr.Verbs,
+			APIGroups:     rr.APIGroups,
+			Resources:     rr.Resources,
+			ResourceNames: rr.ResourceNames,
+			Verbs:         rr.Verbs,
 		}
 	}
 
@@ -229,6 +230,24 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		ObservedGeneration: cr.Generation,
 	})
 	cr.Status.RulesCount = int32(len(resultingRules))
+
+	// Report access still granted on targeted resources through subresources or resourceNames
+	// that the removeRules did not name
+	var remainingGrants []kimv1.RemainingGrant
+	for _, grant := range subtract.RemainingGrants(resultingRules, removeRules) {
+		remainingGrants = append(remainingGrants, kimv1.RemainingGrant{
+			APIGroup:      grant.APIGroup,
+			Resource:      grant.Resource,
+			ResourceNames: grant.ResourceNames,
+			Verbs:         grant.Verbs,
+			Reason:        grant.Reason,
+		})
+	}
+	if len(remainingGrants) > 0 {
+		logger.Info("Access remains on targeted resources", "remainingGrants", len(remainingGrants))
+	}
+	cr.Status.RemainingGrants = remainingGrants
+
 	if err := r.Status().Update(ctx, &cr); err != nil {
 		logger.Error(err, "Failed to update status")
 		return ctrl.Result{}, err
