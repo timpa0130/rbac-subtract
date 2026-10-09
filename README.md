@@ -199,6 +199,8 @@ removeRules:
 
 The target ClusterRole is owned by the `ModifyClusterRole` custom resource via an `ownerReference`. When the `ModifyClusterRole` is deleted, Kubernetes garbage collection automatically removes the target ClusterRole. No manual cleanup or delete handler is needed.
 
+rbac-subtract never adopts a ClusterRole it did not create. If a ClusterRole with the target name already exists and is not owned by the `ModifyClusterRole`, rbac-subtract leaves it unchanged and marks the `ModifyClusterRole` as degraded with reason `TargetNotOwned`. Choose a different name for the `ModifyClusterRole`.
+
 ## Label and annotation propagation
 
 Labels from the `ModifyClusterRole` custom resource propagate to the target ClusterRole. The label `app.kubernetes.io/managed-by: rbac-subtract` is always present.
@@ -293,14 +295,11 @@ Rules containing `resourceNames` (restricting access to specific named resources
 
 ### Aggregated ClusterRoles (`aggregationRule`)
 
-If the target ClusterRole already exists and has an `.aggregationRule`, the controller strips it and takes full ownership of the rules. This is intentional: an aggregated ClusterRole is autofilled by the Kubernetes RBAC controller based on the `clusterRoleSelector` labels, which means any rules the operator writes would be overwritten on the next aggregation pass.
+For an aggregated source, give the `ModifyClusterRole` a different name. rbac-subtract reads the source's current rules and writes the result to a separate target, leaving the source under Kubernetes RBAC aggregation. Source changes are picked up on a later reconciliation (default interval: 4h).
 
-When you point a `ModifyClusterRole` at a target name that matches a pre-existing aggregated ClusterRole:
-- The `aggregationRule` field is removed.
-- The operator's computed rules replace whatever rules existed before.
-- The target ClusterRole becomes a standalone (non-aggregated) role owned and managed entirely by the operator.
+If the target already has an `.aggregationRule`, rbac-subtract leaves it unchanged and marks the `ModifyClusterRole` as degraded with reason `TargetAggregated`. Choose a different target name to preserve the aggregated role.
 
-If you need to subtract rules from an aggregated ClusterRole, create a new target name instead — the operator will create a fresh standalone ClusterRole derived from the source, leaving the original aggregated ClusterRole intact.
+When the source and `ModifyClusterRole` have the same name, the source is the target. rbac-subtract did not create it, so it leaves it unchanged and reports `TargetNotOwned` (or `TargetAggregated` for an aggregated source).
 
 ### `nonResourceURLs` not supported
 

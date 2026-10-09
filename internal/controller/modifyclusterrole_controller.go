@@ -155,13 +155,21 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		},
 	}
 
+	// Never adopt an existing ClusterRole: only write to a target this ModifyClusterRole created
+	var conflictReason, conflictMessage string
 	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, target, func() error {
+		if target.AggregationRule != nil {
+			conflictReason = "TargetAggregated"
+			conflictMessage = fmt.Sprintf("Target ClusterRole %q has an aggregationRule; choose a different target name", cr.Name)
+			return nil
+		}
+		if !target.CreationTimestamp.IsZero() && !metav1.IsControlledBy(target, &cr) {
+			conflictReason = "TargetNotOwned"
+			conflictMessage = fmt.Sprintf("Target ClusterRole %q already exists and is not owned by this ModifyClusterRole; choose a different target name", cr.Name)
+			return nil
+		}
 		if err := controllerutil.SetControllerReference(&cr, target, r.Scheme); err != nil {
 			return err
-		}
-		if target.AggregationRule != nil {
-			logger.Info("The target ClusterRole contains a AggregationRule, Removing it")
-			target.AggregationRule = nil
 		}
 		target.Labels = labels
 		target.Annotations = annotations
@@ -181,6 +189,28 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			logger.Error(updateErr, "Failed to update status condition")
 		}
 		return ctrl.Result{}, err
+	}
+	if conflictReason != "" {
+		logger.Info("Leaving existing target ClusterRole unchanged", "targetName", cr.Name, "reason", conflictReason)
+		meta.SetStatusCondition(&cr.Status.Conditions, metav1.Condition{
+			Type:               "Available",
+			Status:             metav1.ConditionFalse,
+			Reason:             conflictReason,
+			Message:            conflictMessage,
+			ObservedGeneration: cr.Generation,
+		})
+		meta.SetStatusCondition(&cr.Status.Conditions, metav1.Condition{
+			Type:               "Degraded",
+			Status:             metav1.ConditionTrue,
+			Reason:             conflictReason,
+			Message:            conflictMessage,
+			ObservedGeneration: cr.Generation,
+		})
+		if updateErr := r.Status().Update(ctx, &cr); updateErr != nil {
+			logger.Error(updateErr, "Failed to update status condition")
+			return ctrl.Result{}, updateErr
+		}
+		return ctrl.Result{RequeueAfter: reconcileInterval}, nil
 	}
 	logger.Info("Reconciled target ClusterRole", "operation", result, "rulesCount", len(resultingRules))
 
