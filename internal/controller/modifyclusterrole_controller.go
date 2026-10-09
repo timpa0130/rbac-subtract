@@ -155,10 +155,17 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		},
 	}
 
-	targetIsAggregated := false
+	// Never adopt an existing ClusterRole: only write to a target this ModifyClusterRole created
+	var conflictReason, conflictMessage string
 	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, target, func() error {
 		if target.AggregationRule != nil {
-			targetIsAggregated = true
+			conflictReason = "TargetAggregated"
+			conflictMessage = fmt.Sprintf("Target ClusterRole %q has an aggregationRule; choose a different target name", cr.Name)
+			return nil
+		}
+		if !target.CreationTimestamp.IsZero() && !metav1.IsControlledBy(target, &cr) {
+			conflictReason = "TargetNotOwned"
+			conflictMessage = fmt.Sprintf("Target ClusterRole %q already exists and is not owned by this ModifyClusterRole; choose a different target name", cr.Name)
 			return nil
 		}
 		if err := controllerutil.SetControllerReference(&cr, target, r.Scheme); err != nil {
@@ -183,21 +190,20 @@ func (r *ModifyClusterRoleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		return ctrl.Result{}, err
 	}
-	if targetIsAggregated {
-		message := fmt.Sprintf("Target ClusterRole %q has an aggregationRule; choose a different target name", cr.Name)
-		logger.Info("Leaving aggregated target ClusterRole unchanged", "targetName", cr.Name)
+	if conflictReason != "" {
+		logger.Info("Leaving existing target ClusterRole unchanged", "targetName", cr.Name, "reason", conflictReason)
 		meta.SetStatusCondition(&cr.Status.Conditions, metav1.Condition{
 			Type:               "Available",
 			Status:             metav1.ConditionFalse,
-			Reason:             "TargetAggregated",
-			Message:            message,
+			Reason:             conflictReason,
+			Message:            conflictMessage,
 			ObservedGeneration: cr.Generation,
 		})
 		meta.SetStatusCondition(&cr.Status.Conditions, metav1.Condition{
 			Type:               "Degraded",
 			Status:             metav1.ConditionTrue,
-			Reason:             "TargetAggregated",
-			Message:            message,
+			Reason:             conflictReason,
+			Message:            conflictMessage,
 			ObservedGeneration: cr.Generation,
 		})
 		if updateErr := r.Status().Update(ctx, &cr); updateErr != nil {

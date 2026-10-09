@@ -199,6 +199,8 @@ removeRules:
 
 The target ClusterRole is owned by the `ModifyClusterRole` custom resource via an `ownerReference`. When the `ModifyClusterRole` is deleted, Kubernetes garbage collection automatically removes the target ClusterRole. No manual cleanup or delete handler is needed.
 
+rbac-subtract never adopts a ClusterRole it did not create. If a ClusterRole with the target name already exists and is not owned by the `ModifyClusterRole`, rbac-subtract leaves it unchanged and marks the `ModifyClusterRole` as degraded with reason `TargetNotOwned`. Choose a different name for the `ModifyClusterRole`.
+
 ## Label and annotation propagation
 
 Labels from the `ModifyClusterRole` custom resource propagate to the target ClusterRole. The label `app.kubernetes.io/managed-by: rbac-subtract` is always present.
@@ -295,9 +297,9 @@ Rules containing `resourceNames` (restricting access to specific named resources
 
 For an aggregated source, give the `ModifyClusterRole` a different name. rbac-subtract reads the source's current rules and writes the result to a separate target, leaving the source under Kubernetes RBAC aggregation. Source changes are picked up on a later reconciliation (default interval: 4h).
 
-If the target already has an `.aggregationRule`, rbac-subtract leaves it unchanged and marks the `ModifyClusterRole` as degraded. Choose a different target name to preserve the aggregated role.
+If the target already has an `.aggregationRule`, rbac-subtract leaves it unchanged and marks the `ModifyClusterRole` as degraded with reason `TargetAggregated`. Choose a different target name to preserve the aggregated role.
 
-This also applies when the source and `ModifyClusterRole` have the same name: the source is the target, so rbac-subtract leaves it unchanged.
+When the source and `ModifyClusterRole` have the same name, the source is the target. rbac-subtract did not create it, so it leaves it unchanged and reports `TargetNotOwned` (or `TargetAggregated` for an aggregated source).
 
 ### `nonResourceURLs` not supported
 

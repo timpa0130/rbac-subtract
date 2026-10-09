@@ -153,6 +153,97 @@ var _ = Describe("ModifyClusterRole Controller", func() {
 			_ = k8sClient.Delete(ctx, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: aggTargetName}})
 		})
 
+		It("leaves an existing ClusterRole it does not own unchanged and reports the conflict", func() {
+			const existingName = "test-existing-target"
+
+			existingLabels := map[string]string{"owner": "platform-team"}
+			existingRules := []rbacv1.PolicyRule{{
+				APIGroups: []string{""},
+				Resources: []string{"pods"},
+				Verbs:     []string{"get"},
+			}}
+			existing := &rbacv1.ClusterRole{
+				ObjectMeta: metav1.ObjectMeta{Name: existingName, Labels: existingLabels},
+				Rules:      existingRules,
+			}
+			Expect(k8sClient.Create(ctx, existing)).To(Succeed())
+
+			cr := &kimv1.ModifyClusterRole{
+				ObjectMeta: metav1.ObjectMeta{Name: existingName},
+				Spec: kimv1.ModifyClusterRoleSpec{
+					ClusterRole: sourceName,
+					RemoveRules: []kimv1.RemoveRule{
+						{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"get"}},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			reconciler := &ModifyClusterRoleReconciler{
+				Client:    k8sClient,
+				Discovery: &fakediscovery.FakeDiscovery{Fake: &testing.Fake{}},
+				Scheme:    k8sClient.Scheme(),
+			}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: existingName}})
+			Expect(err).NotTo(HaveOccurred())
+
+			var updated rbacv1.ClusterRole
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: existingName}, &updated)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(updated.Rules).To(Equal(existingRules))
+			Expect(updated.OwnerReferences).To(BeEmpty())
+			Expect(updated.Labels).To(Equal(existingLabels))
+
+			var updatedCR kimv1.ModifyClusterRole
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: existingName}, &updatedCR)
+			Expect(err).NotTo(HaveOccurred())
+			available := meta.FindStatusCondition(updatedCR.Status.Conditions, "Available")
+			Expect(available).NotTo(BeNil())
+			Expect(available.Status).To(Equal(metav1.ConditionFalse))
+			Expect(available.Reason).To(Equal("TargetNotOwned"))
+			degraded := meta.FindStatusCondition(updatedCR.Status.Conditions, "Degraded")
+			Expect(degraded).NotTo(BeNil())
+			Expect(degraded.Status).To(Equal(metav1.ConditionTrue))
+			Expect(degraded.Reason).To(Equal("TargetNotOwned"))
+
+			_ = k8sClient.Delete(ctx, &kimv1.ModifyClusterRole{ObjectMeta: metav1.ObjectMeta{Name: existingName}})
+			_ = k8sClient.Delete(ctx, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: existingName}})
+		})
+
+		It("keeps updating a target ClusterRole it owns", func() {
+			reconciler := &ModifyClusterRoleReconciler{
+				Client:    k8sClient,
+				Discovery: &fakediscovery.FakeDiscovery{Fake: &testing.Fake{}},
+				Scheme:    k8sClient.Scheme(),
+			}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			var cr kimv1.ModifyClusterRole
+			Expect(k8sClient.Get(ctx, namespacedName, &cr)).To(Succeed())
+			cr.Spec.RemoveRules = []kimv1.RemoveRule{
+				{APIGroups: []string{"apps"}, Resources: []string{"statefulsets"}, Verbs: []string{"*"}},
+			}
+			Expect(k8sClient.Update(ctx, &cr)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			var target rbacv1.ClusterRole
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetName}, &target)).To(Succeed())
+			Expect(target.Rules).To(Equal([]rbacv1.PolicyRule{{
+				APIGroups: []string{"apps"},
+				Resources: []string{"deployments"},
+				Verbs:     []string{"get", "list"},
+			}}))
+
+			var updatedCR kimv1.ModifyClusterRole
+			Expect(k8sClient.Get(ctx, namespacedName, &updatedCR)).To(Succeed())
+			available := meta.FindStatusCondition(updatedCR.Status.Conditions, "Available")
+			Expect(available).NotTo(BeNil())
+			Expect(available.Status).To(Equal(metav1.ConditionTrue))
+		})
+
 		It("reports missing source ClusterRole", func() {
 			cr := &kimv1.ModifyClusterRole{
 				ObjectMeta: metav1.ObjectMeta{Name: "no-source"},
