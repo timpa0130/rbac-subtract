@@ -14,3 +14,9 @@ spec:
     - daemonsets
     verbs:
     - '*'
+  - apiGroups:
+    - apps
+    resources:
+    - deployments
+    verbs:
+    - '*'
